@@ -72,8 +72,8 @@ LEDState led2 = {FP_MB2_PWRLED_GPIO_Port, FP_MB2_PWRLED_Pin, 0, 0, 0, 0};
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define DEBOUNCE_DELAY 50 // Задержка для обработки дребезга (в мс)
-
+#define DEBOUNCE_DELAY 100 // Задержка для обработки дребезга (в мс)
+#define TEMP_REGISTER 0x00
 #define MAX_DISKS 24
 /* USER CODE END PD */
 
@@ -149,6 +149,11 @@ uint8_t state_fp2 = 0;
 uint8_t hotswap_mb1 = 0;
 uint8_t hotswap_mb2 = 0;
 
+uint8_t sgpio_started = 0; // Начало передачи sgpio
+uint8_t Counter_sgpio_timeout = 0; // счётчик sgpio обнраружения sgpio
+uint8_t sgpio_timeout = 0; // sgpio не обнаружен по времени
+uint8_t previousActivity[MAX_DISKS] = {0}; // Массив для хранения предыдущего состояния активности
+uint32_t activityTimer[MAX_DISKS] = {0}; // Массив для хранения времени последнего изменения активности
 
 volatile uint8_t button1_pressed = 0; // Флаг нажатия кнопки 1
 volatile uint8_t button2_pressed = 0; // Флаг нажатия кнопки 2
@@ -176,7 +181,8 @@ void Process_SGPIO_Data(uint16_t sgpioData, uint8_t startIndex);
 void Set_Led();
 void Set_Led_On();
 void Set_Led_Off();
-uint8_t ReadTemperature();
+int16_t readTemperature(uint8_t address);
+int16_t getMaxTemperature();
 void UpdateDriveStatus(uint8_t drive_index, uint8_t prstn_bit, uint8_t buf_value);
 void UpdateLEDStates();
 void ResetBus();
@@ -187,7 +193,8 @@ void PowerOnAdapter(uint8_t adapter_number);
 void PowerOffAdapter(uint8_t adapter_number);
 void UpdateCPU_PSON();
 void RebootAdapter(uint8_t adapter_number, uint8_t is_hard_reboot);
-
+void ProcessPins(uint8_t diskIndex);
+void Read_disks_connected();
 void UpdateLED(LEDState *led)
 {
 	if (led->is_blinking) {
@@ -206,7 +213,20 @@ void UpdateLED(LEDState *led)
 			HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, RESET);
 			led->is_blinking = 0;
 		}
+	} else if (adapter1_state == 1 || adapter2_state == 1)
+	{
+		if(adapter1_state == 1 && led->GPIO_Pin == FP_MB1_PWRLED_Pin) HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, SET);
+		if(adapter2_state == 1 && led->GPIO_Pin == FP_MB2_PWRLED_Pin) HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, SET);
 	}
+	if (adapter1_state == 0 && led->GPIO_Pin == FP_MB1_PWRLED_Pin)
+	{
+		HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, RESET);
+	}
+	if (adapter2_state == 0 && led->GPIO_Pin == FP_MB2_PWRLED_Pin){
+		HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, RESET);
+	}
+
+
 }
 
 void StartBlinking(LEDState *led, uint32_t frequency, uint32_t duration)
@@ -216,6 +236,7 @@ void StartBlinking(LEDState *led, uint32_t frequency, uint32_t duration)
 	led->blink_start_time = HAL_GetTick(); // Время начала мигания
 	led->is_blinking = 1;                 // Включить мигание
 }
+
 void HandleButtonAction(uint8_t button_number, uint32_t press_duration)
 {
 	if (button_number == 1) {
@@ -261,111 +282,74 @@ void HandleButtonAction(uint8_t button_number, uint32_t press_duration)
 /* USER CODE END 0 */
 
 /**
- * @brief  The application entry point.
- * @retval int
- */
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void)
 {
 
-	/* USER CODE BEGIN 1 */
+  /* USER CODE BEGIN 1 */
 
-	/* USER CODE END 1 */
+  /* USER CODE END 1 */
 
-	/* MCU Configuration--------------------------------------------------------*/
+  /* MCU Configuration--------------------------------------------------------*/
 
-	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-	HAL_Init();
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
 
-	/* USER CODE BEGIN Init */
+  /* USER CODE BEGIN Init */
 
-	/* USER CODE END Init */
+  /* USER CODE END Init */
 
-	/* Configure the system clock */
-	SystemClock_Config();
+  /* Configure the system clock */
+  SystemClock_Config();
 
-	/* USER CODE BEGIN SysInit */
+  /* USER CODE BEGIN SysInit */
 
-	/* USER CODE END SysInit */
+  /* USER CODE END SysInit */
 
-	/* Initialize all configured peripherals */
-	MX_GPIO_Init();
-	MX_DMA_Init();
-	MX_I2C2_Init();
-	MX_TIM3_Init();
-	MX_TIM1_Init();
-	MX_TIM2_Init();
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  MX_I2C2_Init();
+  MX_TIM3_Init();
+  MX_TIM1_Init();
+  MX_TIM2_Init();
 
-	/* Initialize interrupts */
-	MX_NVIC_Init();
-	/* USER CODE BEGIN 2 */
-	//ResetBus();
+  /* Initialize interrupts */
+  MX_NVIC_Init();
+  /* USER CODE BEGIN 2 */
+	ResetBus();
 	HAL_Delay(500);
 	HAL_NVIC_SetPriority(EXTI4_15_IRQn, 1, 0);
 	HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
-	__enable_irq();
-	/* USER CODE END 2 */
 
-	/* Infinite loop */
-	/* USER CODE BEGIN WHILE */
+	InitializeDiskPins();
+
+	Initialize_Disks();
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
 	while (1)
 	{
-		/* USER CODE END WHILE */
+    /* USER CODE END WHILE */
 
-		/* USER CODE BEGIN 3 */
-		//Обработка кнопок и режимы работы мат плат
-		/*uint8_t button1_state = HAL_GPIO_ReadPin(FP_MB1_PWR_SW_GPIO_Port, FP_MB1_PWR_SW_Pin);
-		uint8_t button2_state = HAL_GPIO_ReadPin(FP_MB2_PWR_SW_GPIO_Port, FP_MB2_PWR_SW_Pin);
+    /* USER CODE BEGIN 3 */
 
-		HandleButton(&button1, button1_state);
-		HandleButton(&button2, button2_state);
-
-		// Обработка короткого нажатия (включение сервера)
-		if (button1.short_press) {
-			PowerOnAdapter(1);
-			button1.short_press = 0;
-		}
-		if (button2.short_press) {
-			PowerOnAdapter(2);
-			button2.short_press = 0;
-		}
-
-		// Обработка среднего нажатия (мягкая перезагрузка)
-		if (button1.medium_press) {
-			RebootAdapter(1, 0); // Мягкая перезагрузка адаптера 1
-			StartBlinking(&led1, 4, 5000); // Мигание 4 Гц, 5 сек
-			button1.medium_press = 0;
-		}
-		if (button2.medium_press) {
-			RebootAdapter(2, 0); // Мягкая перезагрузка адаптера 2
-			StartBlinking(&led2, 4, 5000); // Мигание 4 Гц, 5 сек
-			button2.medium_press = 0;
-		}
-
-		// Обработка долгого нажатия (жесткая перезагрузка)
-		if (button1.long_press) {
-			RebootAdapter(1, 1); // Жесткая перезагрузка адаптера 1
-			StartBlinking(&led1, 4, 5000); // Мигание 4 Гц, 5 сек
-			button1.long_press = 0;
-		}
-		if (button2.long_press) {
-			RebootAdapter(2, 1); // Жесткая перезагрузка адаптера 2
-			StartBlinking(&led2, 4, 5000); // Мигание 4 Гц, 5 сек
-			button2.long_press = 0;
-		}
-
-		// Обработка очень долгого нажатия (выключение сервера)
-		if (button1.very_long_press) {
-			PowerOffAdapter(1);
-			button1.very_long_press = 0;
-		}
-		if (button2.very_long_press) {
-			PowerOffAdapter(2);
-			button2.very_long_press = 0;
-		}*/
 
 		// Обновление состояния светодиодов
 		UpdateLED(&led1);
 		UpdateLED(&led2);
+		for (int i = 0; i < MAX_DISKS; ++i)
+		{
+			ProcessPins(i);  // Обновляем статус каждого диска
+			if (disks[i].activity == 1 && (HAL_GetTick() - activityTimer[i] >= 5000) && sgpio_started != 1) {
+				// Сбрасываем активность
+				disks[i].activity = 0;
+				Update_Disk_Status(i, disks[i].activity, disks[i].error, disks[i].locate);
+			}
+		}
 
 		// Обновление состояния CPU_PSON
 		//UpdateCPU_PSON();
@@ -375,392 +359,392 @@ int main(void)
 
 
 	}
-	/* USER CODE END 3 */
+  /* USER CODE END 3 */
 }
 
 /**
- * @brief System Clock Configuration
- * @retval None
- */
+  * @brief System Clock Configuration
+  * @retval None
+  */
 void SystemClock_Config(void)
 {
-	RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-	RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-	/** Configure the main internal regulator output voltage
-	 */
-	HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1);
+  /** Configure the main internal regulator output voltage
+  */
+  HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1);
 
-	/** Initializes the RCC Oscillators according to the specified parameters
-	 * in the RCC_OscInitTypeDef structure.
-	 */
-	RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-	RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-	RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-	RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-	RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV1;
-	RCC_OscInitStruct.PLL.PLLN = 16;
-	RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-	RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV4;
-	RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
-	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-	{
-		Error_Handler();
-	}
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV1;
+  RCC_OscInitStruct.PLL.PLLN = 16;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV4;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-	/** Initializes the CPU, AHB and APB buses clocks
-	 */
-	RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-			|RCC_CLOCKTYPE_PCLK1;
-	RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-	RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-	RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
 
-	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-	{
-		Error_Handler();
-	}
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-	/** Enables the Clock Security System
-	 */
-	HAL_RCC_EnableCSS();
+  /** Enables the Clock Security System
+  */
+  HAL_RCC_EnableCSS();
 }
 
 /**
- * @brief NVIC Configuration.
- * @retval None
- */
+  * @brief NVIC Configuration.
+  * @retval None
+  */
 static void MX_NVIC_Init(void)
 {
-	/* DMA1_Channel1_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 1, 0);
-	HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
-	/* DMA1_Channel2_3_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA1_Channel2_3_IRQn, 1, 0);
-	HAL_NVIC_EnableIRQ(DMA1_Channel2_3_IRQn);
-	/* TIM1_BRK_UP_TRG_COM_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(TIM1_BRK_UP_TRG_COM_IRQn, 2, 0);
-	HAL_NVIC_EnableIRQ(TIM1_BRK_UP_TRG_COM_IRQn);
-	/* TIM2_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(TIM2_IRQn, 2, 0);
-	HAL_NVIC_EnableIRQ(TIM2_IRQn);
-	/* TIM3_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(TIM3_IRQn, 2, 0);
-	HAL_NVIC_EnableIRQ(TIM3_IRQn);
-	/* I2C2_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(I2C2_IRQn, 1, 0);
-	HAL_NVIC_EnableIRQ(I2C2_IRQn);
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+  /* DMA1_Channel2_3_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel2_3_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel2_3_IRQn);
+  /* TIM1_BRK_UP_TRG_COM_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(TIM1_BRK_UP_TRG_COM_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(TIM1_BRK_UP_TRG_COM_IRQn);
+  /* TIM2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(TIM2_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(TIM2_IRQn);
+  /* TIM3_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(TIM3_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(TIM3_IRQn);
+  /* I2C2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(I2C2_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(I2C2_IRQn);
 }
 
 /**
- * @brief I2C2 Initialization Function
- * @param None
- * @retval None
- */
+  * @brief I2C2 Initialization Function
+  * @param None
+  * @retval None
+  */
 static void MX_I2C2_Init(void)
 {
 
-	/* USER CODE BEGIN I2C2_Init 0 */
+  /* USER CODE BEGIN I2C2_Init 0 */
 
-	/* USER CODE END I2C2_Init 0 */
+  /* USER CODE END I2C2_Init 0 */
 
-	/* USER CODE BEGIN I2C2_Init 1 */
+  /* USER CODE BEGIN I2C2_Init 1 */
 
-	/* USER CODE END I2C2_Init 1 */
-	hi2c2.Instance = I2C2;
-	hi2c2.Init.Timing = 0x10B17DB5;
-	hi2c2.Init.OwnAddress1 = 0;
-	hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-	hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-	hi2c2.Init.OwnAddress2 = 0;
-	hi2c2.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
-	hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-	hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_ENABLE;
-	if (HAL_I2C_Init(&hi2c2) != HAL_OK)
-	{
-		Error_Handler();
-	}
+  /* USER CODE END I2C2_Init 1 */
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.Timing = 0x00C12166;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_ENABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-	/** Configure Analogue filter
-	 */
-	if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
-	{
-		Error_Handler();
-	}
+  /** Configure Analogue filter
+  */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-	/** Configure Digital filter
-	 */
-	if (HAL_I2CEx_ConfigDigitalFilter(&hi2c2, 0) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	/* USER CODE BEGIN I2C2_Init 2 */
+  /** Configure Digital filter
+  */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c2, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C2_Init 2 */
 
-	/* USER CODE END I2C2_Init 2 */
+  /* USER CODE END I2C2_Init 2 */
 
 }
 
 /**
- * @brief TIM1 Initialization Function
- * @param None
- * @retval None
- */
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
 static void MX_TIM1_Init(void)
 {
 
-	/* USER CODE BEGIN TIM1_Init 0 */
+  /* USER CODE BEGIN TIM1_Init 0 */
 
-	/* USER CODE END TIM1_Init 0 */
+  /* USER CODE END TIM1_Init 0 */
 
-	TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-	TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
 
-	/* USER CODE BEGIN TIM1_Init 1 */
+  /* USER CODE BEGIN TIM1_Init 1 */
 
-	/* USER CODE END TIM1_Init 1 */
-	htim1.Instance = TIM1;
-	htim1.Init.Prescaler = 63999;
-	htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim1.Init.Period = 124;
-	htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-	htim1.Init.RepetitionCounter = 0;
-	htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-	if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-	if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-	sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
-	sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-	if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	/* USER CODE BEGIN TIM1_Init 2 */
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 63999;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 124;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM1_Init 2 */
 
-	/* USER CODE END TIM1_Init 2 */
+  /* USER CODE END TIM1_Init 2 */
 
 }
 
 /**
- * @brief TIM2 Initialization Function
- * @param None
- * @retval None
- */
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
 static void MX_TIM2_Init(void)
 {
 
-	/* USER CODE BEGIN TIM2_Init 0 */
+  /* USER CODE BEGIN TIM2_Init 0 */
 
-	/* USER CODE END TIM2_Init 0 */
+  /* USER CODE END TIM2_Init 0 */
 
-	TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-	TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
 
-	/* USER CODE BEGIN TIM2_Init 1 */
+  /* USER CODE BEGIN TIM2_Init 1 */
 
-	/* USER CODE END TIM2_Init 1 */
-	htim2.Instance = TIM2;
-	htim2.Init.Prescaler = 63999;
-	htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim2.Init.Period = 249;
-	htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-	htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-	if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-	if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-	sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-	if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	/* USER CODE BEGIN TIM2_Init 2 */
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 63999;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 249;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
 
-	/* USER CODE END TIM2_Init 2 */
+  /* USER CODE END TIM2_Init 2 */
 
 }
 
 /**
- * @brief TIM3 Initialization Function
- * @param None
- * @retval None
- */
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
 static void MX_TIM3_Init(void)
 {
 
-	/* USER CODE BEGIN TIM3_Init 0 */
+  /* USER CODE BEGIN TIM3_Init 0 */
 
-	/* USER CODE END TIM3_Init 0 */
+  /* USER CODE END TIM3_Init 0 */
 
-	TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-	TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
 
-	/* USER CODE BEGIN TIM3_Init 1 */
+  /* USER CODE BEGIN TIM3_Init 1 */
 
-	/* USER CODE END TIM3_Init 1 */
-	htim3.Instance = TIM3;
-	htim3.Init.Prescaler = 63999;
-	htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim3.Init.Period = 999;
-	htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-	htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-	if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-	if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-	sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-	if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	/* USER CODE BEGIN TIM3_Init 2 */
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 63999;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 999;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
 
-	/* USER CODE END TIM3_Init 2 */
+  /* USER CODE END TIM3_Init 2 */
 
 }
 
 /**
- * Enable DMA controller clock
- */
+  * Enable DMA controller clock
+  */
 static void MX_DMA_Init(void)
 {
 
-	/* DMA controller clock enable */
-	__HAL_RCC_DMA1_CLK_ENABLE();
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
 
 }
 
 /**
- * @brief GPIO Initialization Function
- * @param None
- * @retval None
- */
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
 static void MX_GPIO_Init(void)
 {
-	GPIO_InitTypeDef GPIO_InitStruct = {0};
-	/* USER CODE BEGIN MX_GPIO_Init_1 */
-	/* USER CODE END MX_GPIO_Init_1 */
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+/* USER CODE BEGIN MX_GPIO_Init_1 */
+/* USER CODE END MX_GPIO_Init_1 */
 
-	/* GPIO Ports Clock Enable */
-	__HAL_RCC_GPIOC_CLK_ENABLE();
-	__HAL_RCC_GPIOF_CLK_ENABLE();
-	__HAL_RCC_GPIOA_CLK_ENABLE();
-	__HAL_RCC_GPIOB_CLK_ENABLE();
-	__HAL_RCC_GPIOD_CLK_ENABLE();
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOF_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
 
-	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOC, FP_MB1_PWRLED_Pin|FP_MB2_PWRLED_Pin|CPU_PSON_Pin|MB1_PWR_SW_Pin, GPIO_PIN_RESET);
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, FP_MB1_PWRLED_Pin|FP_MB2_PWRLED_Pin|CPU_PSON_Pin|MB1_PWR_SW_Pin, GPIO_PIN_RESET);
 
-	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOC, SGPIO_I2C2_RES_G_Pin|SGPIO_I2C2_RES_Pin|SGPIO_I2C1_RES_Pin, GPIO_PIN_SET);
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, SGPIO_I2C2_RES_G_Pin|SGPIO_I2C2_RES_Pin|SGPIO_I2C1_RES_Pin, GPIO_PIN_SET);
 
-	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOA, MB1_STATUS_LED_Pin|MB2_STATUS_LED_Pin, GPIO_PIN_RESET);
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, MB1_STATUS_LED_Pin|MB2_STATUS_LED_Pin, GPIO_PIN_RESET);
 
-	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOB, SGPIO_I2C3_RES_Pin|SGPIO_I2C3RES_G_Pin, GPIO_PIN_SET);
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, SGPIO_I2C3_RES_Pin|SGPIO_I2C3RES_G_Pin, GPIO_PIN_SET);
 
-	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOD, SGPIO_I2C1_RES_G_Pin|TEMP_I2C2_RES_Pin|TEMP_I2C1_RES_Pin, GPIO_PIN_SET);
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOD, SGPIO_I2C1_RES_G_Pin|TEMP_I2C2_RES_Pin|TEMP_I2C1_RES_Pin, GPIO_PIN_SET);
 
-	/*Configure GPIO pins : FP_MB1_PWRLED_Pin SGPIO_I2C2_RES_G_Pin SGPIO_I2C2_RES_Pin FP_MB2_PWRLED_Pin
+  /*Configure GPIO pins : FP_MB1_PWRLED_Pin SGPIO_I2C2_RES_G_Pin SGPIO_I2C2_RES_Pin FP_MB2_PWRLED_Pin
                            CPU_PSON_Pin MB1_PWR_SW_Pin SGPIO_I2C1_RES_Pin */
-	GPIO_InitStruct.Pin = FP_MB1_PWRLED_Pin|SGPIO_I2C2_RES_G_Pin|SGPIO_I2C2_RES_Pin|FP_MB2_PWRLED_Pin
-			|CPU_PSON_Pin|MB1_PWR_SW_Pin|SGPIO_I2C1_RES_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  GPIO_InitStruct.Pin = FP_MB1_PWRLED_Pin|SGPIO_I2C2_RES_G_Pin|SGPIO_I2C2_RES_Pin|FP_MB2_PWRLED_Pin
+                          |CPU_PSON_Pin|MB1_PWR_SW_Pin|SGPIO_I2C1_RES_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-	/*Configure GPIO pins : D_DRIVE4_ACTIVITY_Pin B_DRIVE4_ACTIVITY_Pin B_DRIVE3_ACTIVITY_Pin B_DRIVE2_ACTIVITY_Pin
+  /*Configure GPIO pins : D_DRIVE4_ACTIVITY_Pin B_DRIVE4_ACTIVITY_Pin B_DRIVE3_ACTIVITY_Pin B_DRIVE2_ACTIVITY_Pin
                            C_DRIVE1_ACTIVITY_Pin C_DRIVE2_ACTIVITY_Pin E_DRIVE1_ACTIVITY_Pin */
-	GPIO_InitStruct.Pin = D_DRIVE4_ACTIVITY_Pin|B_DRIVE4_ACTIVITY_Pin|B_DRIVE3_ACTIVITY_Pin|B_DRIVE2_ACTIVITY_Pin
-			|C_DRIVE1_ACTIVITY_Pin|C_DRIVE2_ACTIVITY_Pin|E_DRIVE1_ACTIVITY_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  GPIO_InitStruct.Pin = D_DRIVE4_ACTIVITY_Pin|B_DRIVE4_ACTIVITY_Pin|B_DRIVE3_ACTIVITY_Pin|B_DRIVE2_ACTIVITY_Pin
+                          |C_DRIVE1_ACTIVITY_Pin|C_DRIVE2_ACTIVITY_Pin|E_DRIVE1_ACTIVITY_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-	/*Configure GPIO pins : MB1_BITCH_Pin MB2_BITCH_Pin CPU_PWROK_Pin A_DRIVE4_ACTIVITY_Pin
+  /*Configure GPIO pins : MB1_BITCH_Pin MB2_BITCH_Pin CPU_PWROK_Pin A_DRIVE4_ACTIVITY_Pin
                            B_DRIVE1_ACTIVITY_Pin D_DRIVE1_ACTIVITY_Pin D_DRIVE2_ACTIVITY_Pin D_DRIVE3_ACTIVITY_Pin */
-	GPIO_InitStruct.Pin = MB1_BITCH_Pin|MB2_BITCH_Pin|CPU_PWROK_Pin|A_DRIVE4_ACTIVITY_Pin
-			|B_DRIVE1_ACTIVITY_Pin|D_DRIVE1_ACTIVITY_Pin|D_DRIVE2_ACTIVITY_Pin|D_DRIVE3_ACTIVITY_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  GPIO_InitStruct.Pin = MB1_BITCH_Pin|MB2_BITCH_Pin|CPU_PWROK_Pin|A_DRIVE4_ACTIVITY_Pin
+                          |B_DRIVE1_ACTIVITY_Pin|D_DRIVE1_ACTIVITY_Pin|D_DRIVE2_ACTIVITY_Pin|D_DRIVE3_ACTIVITY_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-	/*Configure GPIO pins : MB1_STATUS_LED_Pin MB2_STATUS_LED_Pin */
-	GPIO_InitStruct.Pin = MB1_STATUS_LED_Pin|MB2_STATUS_LED_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  /*Configure GPIO pins : MB1_STATUS_LED_Pin MB2_STATUS_LED_Pin */
+  GPIO_InitStruct.Pin = MB1_STATUS_LED_Pin|MB2_STATUS_LED_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-	/*Configure GPIO pins : MB1_ATTACH_Pin A_DRIVE1_ACTIVITY_Pin A_DRIVE2_ACTIVITY_Pin A_DRIVE3_ACTIVITY_Pin
+  /*Configure GPIO pins : MB1_ATTACH_Pin A_DRIVE1_ACTIVITY_Pin A_DRIVE2_ACTIVITY_Pin A_DRIVE3_ACTIVITY_Pin
                            F_DRIVE4_ACTIVITY_Pin F_DRIVE3_ACTIVITY_Pin F_DRIVE2_ACTIVITY_Pin F_DRIVE1_ACTIVITY_Pin
                            E_DRIVE4_ACTIVITY_Pin E_DRIVE3_ACTIVITY_Pin E_DRIVE2_ACTIVITY_Pin */
-	GPIO_InitStruct.Pin = MB1_ATTACH_Pin|A_DRIVE1_ACTIVITY_Pin|A_DRIVE2_ACTIVITY_Pin|A_DRIVE3_ACTIVITY_Pin
-			|F_DRIVE4_ACTIVITY_Pin|F_DRIVE3_ACTIVITY_Pin|F_DRIVE2_ACTIVITY_Pin|F_DRIVE1_ACTIVITY_Pin
-			|E_DRIVE4_ACTIVITY_Pin|E_DRIVE3_ACTIVITY_Pin|E_DRIVE2_ACTIVITY_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  GPIO_InitStruct.Pin = MB1_ATTACH_Pin|A_DRIVE1_ACTIVITY_Pin|A_DRIVE2_ACTIVITY_Pin|A_DRIVE3_ACTIVITY_Pin
+                          |F_DRIVE4_ACTIVITY_Pin|F_DRIVE3_ACTIVITY_Pin|F_DRIVE2_ACTIVITY_Pin|F_DRIVE1_ACTIVITY_Pin
+                          |E_DRIVE4_ACTIVITY_Pin|E_DRIVE3_ACTIVITY_Pin|E_DRIVE2_ACTIVITY_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-	/*Configure GPIO pins : SGPIO_I2C3_RES_Pin SGPIO_I2C3RES_G_Pin */
-	GPIO_InitStruct.Pin = SGPIO_I2C3_RES_Pin|SGPIO_I2C3RES_G_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  /*Configure GPIO pins : SGPIO_I2C3_RES_Pin SGPIO_I2C3RES_G_Pin */
+  GPIO_InitStruct.Pin = SGPIO_I2C3_RES_Pin|SGPIO_I2C3RES_G_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-	/*Configure GPIO pins : C_DRIVE3_ACTIVITY_Pin C_DRIVE4_ACTIVITY_Pin MB2_ATTACH_Pin MB2_PWR_SW_Pin */
-	GPIO_InitStruct.Pin = C_DRIVE3_ACTIVITY_Pin|C_DRIVE4_ACTIVITY_Pin|MB2_ATTACH_Pin|MB2_PWR_SW_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+  /*Configure GPIO pins : C_DRIVE3_ACTIVITY_Pin C_DRIVE4_ACTIVITY_Pin MB2_ATTACH_Pin MB2_PWR_SW_Pin */
+  GPIO_InitStruct.Pin = C_DRIVE3_ACTIVITY_Pin|C_DRIVE4_ACTIVITY_Pin|MB2_ATTACH_Pin|MB2_PWR_SW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-	/*Configure GPIO pin : FP_MB1_PWR_SW_Pin */
-	GPIO_InitStruct.Pin = FP_MB1_PWR_SW_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
-	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	HAL_GPIO_Init(FP_MB1_PWR_SW_GPIO_Port, &GPIO_InitStruct);
+  /*Configure GPIO pin : FP_MB1_PWR_SW_Pin */
+  GPIO_InitStruct.Pin = FP_MB1_PWR_SW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(FP_MB1_PWR_SW_GPIO_Port, &GPIO_InitStruct);
 
-	/*Configure GPIO pin : FP_MB2_PWR_SW_Pin */
-	GPIO_InitStruct.Pin = FP_MB2_PWR_SW_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
-	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	HAL_GPIO_Init(FP_MB2_PWR_SW_GPIO_Port, &GPIO_InitStruct);
+  /*Configure GPIO pin : FP_MB2_PWR_SW_Pin */
+  GPIO_InitStruct.Pin = FP_MB2_PWR_SW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(FP_MB2_PWR_SW_GPIO_Port, &GPIO_InitStruct);
 
-	/*Configure GPIO pins : SGPIO_I2C1_RES_G_Pin TEMP_I2C2_RES_Pin TEMP_I2C1_RES_Pin */
-	GPIO_InitStruct.Pin = SGPIO_I2C1_RES_G_Pin|TEMP_I2C2_RES_Pin|TEMP_I2C1_RES_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-	HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+  /*Configure GPIO pins : SGPIO_I2C1_RES_G_Pin TEMP_I2C2_RES_Pin TEMP_I2C1_RES_Pin */
+  GPIO_InitStruct.Pin = SGPIO_I2C1_RES_G_Pin|TEMP_I2C2_RES_Pin|TEMP_I2C1_RES_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-	/* EXTI interrupt init*/
-	HAL_NVIC_SetPriority(EXTI4_15_IRQn, 1, 0);
-	HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 1, 0);
+  HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
 
-	/* USER CODE BEGIN MX_GPIO_Init_2 */
-	/* USER CODE END MX_GPIO_Init_2 */
+/* USER CODE BEGIN MX_GPIO_Init_2 */
+/* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
@@ -851,12 +835,15 @@ void ResetBus()
 
 void Set_Led()
 {
-	HAL_I2C_Master_Transmit_DMA(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_0, 1);
-	HAL_I2C_Master_Transmit_DMA(&hi2c2, (LED_adr << 1), channel_one, 3);
-	HAL_I2C_Master_Transmit_DMA(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_1, 1);
-	HAL_I2C_Master_Transmit_DMA(&hi2c2, (LED_adr << 1), channel_two, 3);
-	HAL_I2C_Master_Transmit_DMA(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_2, 1);
-	HAL_I2C_Master_Transmit_DMA(&hi2c2, (LED_adr << 1), channel_three, 3);
+	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_0, 1, 10);
+	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), i2cbuff, 3, 10);
+	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), channel_one, 3, 10);
+	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_1, 1, 10);
+	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), i2cbuff, 3, 10);
+	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), channel_two, 3, 10);
+	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_2, 1, 10);
+	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), i2cbuff, 3, 10);
+	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), channel_three, 3, 10);
 }
 
 void Set_Led_On()
@@ -882,7 +869,8 @@ void Set_Led_Off()
 
 }
 void Led_Init()
-{	flag_update = 1;
+{
+	flag_update = 1;
 HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_0, 1, 10);
 flag_update = 3;
 Set_Led_On();
@@ -905,60 +893,52 @@ Set_Led_Off();
 HAL_Delay(250);
 flag_update = 2;
 }
-uint8_t ReadTemperature()
-{
-	uint8_t maxTemp1 = 0;
-	uint8_t maxTemp2 = 0;
 
-	// Чтение температуры с первого датчика (адрес 0x94)
-	HAL_I2C_Master_Receive_DMA(&hi2c2, 0x94 << 1, &maxTemp1, 1);
-	while (HAL_I2C_GetState(&hi2c2) != HAL_I2C_STATE_READY) {}
+// Функция для чтения температуры с датчика (возвращает температуру в десятых долях градуса)
+int16_t readTemperature(uint8_t address) {
+    uint8_t data[2];
+    // Чтение двух байтов из регистра температуры
+    i2c_read(address, TEMP_REGISTER, data, 2);
 
-	// Чтение температуры со второго датчика (адрес 0x92)
-	HAL_I2C_Master_Receive_DMA(&hi2c2, 0x92 << 1, &maxTemp2, 1);
-	while (HAL_I2C_GetState(&hi2c2) != HAL_I2C_STATE_READY) {}
+    // Объединение двух байтов в 16-битное значение
+    int16_t tempData = (data[0] << 8) | data[1];
 
-	// Возвращаем максимальное значение температуры
-	return (maxTemp1 > maxTemp2) ? maxTemp1 : maxTemp2;
+    // Извлечение знакового бита
+    bool isNegative = (tempData & 0x8000) != 0;
 
+    // Извлечение целой части температуры
+    int16_t integerPart = (tempData >> 8) & 0x7F;
+
+    // Извлечение дробной части (0.5°C)
+    int16_t fractionalPart = (tempData & 0x80) ? 5 : 0;
+
+    // Расчет итоговой температуры в десятых долях градуса
+    int16_t temperature = integerPart * 10 + fractionalPart;
+
+    // Учет отрицательной температуры
+    if (isNegative) {
+        temperature = -temperature;
+    }
+
+    return temperature;
 }
 
-void UpdateDriveStatus(uint8_t drive_index, uint8_t prstn_bit, uint8_t buf_value)
-{
-	if (drive_index < MAX_DISKS) { // Проверка на выход за границы массива
-		// Если бит PRSNT равен 0, диск подключен
-		if ((buf_value & prstn_bit) == 0) {
-			disks[drive_index].isConnected = 1;
-		} else {
-			disks[drive_index].isConnected = 0;
-		}
-	}
-	//flag_update++;
+// Функция для получения максимальной температуры
+int16_t getMaxTemperature() {
+    int16_t temp1 = readTemperature(MAX7500_ADDR_1);
+    int16_t temp2 = readTemperature(MAX7500_ADDR_2);
+
+    return (temp1 > temp2) ? temp1 : temp2;
 }
+
+
 
 void Read_disks_connected()
 {
-	/*flag_read=2;
-	// Обработка дисков 0-23
-	for (uint8_t expander_channel = 0; expander_channel < 3; expander_channel++) {
-		// Выбор канала расширителя
-		uint8_t i2c_init[] = {0x01 << expander_channel, 0x00};
-		HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), i2c_init, 1, 100);
-		flag_read = 3;
-		// Чтение регистров 0x01 и 0x00
-		for (uint8_t reg = 0x01; reg >= 0x00; reg--) {
-			Read_Register(reg, Buf_PRSTN, Dev_SLP_adr);
-			flag_read = 4;
-			// Обработка 4 дисков за один регистр
-			for (uint8_t i = 0; i < 4; i++) {
-				uint8_t drive_index = expander_channel * 8 + reg * 4 + i;
-				UpdateDriveStatus(drive_index, prstn_masks[i], Buf_PRSTN[0]);
-				flag_read = 5;
-			}
-			if (reg == 0x00) break; // Выход из цикла после обработки reg = 0x00
-		}
-	}*/
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_0, 1, 1);
+
+	ResetBus();
+	HAL_Delay(10);
+	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_0, 1, 10);
 	Read_Register(0x01, Buf_PRSTN, Dev_SLP_adr);
 
 
@@ -1020,7 +1000,7 @@ void Read_disks_connected()
 		disks[7].isConnected = 0;
 	}
 
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_1, 1, 1);
+	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_1, 1, 10);
 	Read_Register(0x01, Buf_PRSTN, Dev_SLP_adr);
 
 	if (~Buf_PRSTN[0] & 0x02)		//PRSTN D1
@@ -1075,7 +1055,7 @@ void Read_disks_connected()
 		disks[15].isConnected = 0;
 	}
 
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_2, 1, 1);
+	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_2, 1, 10);
 	Read_Register(0x01, Buf_PRSTN, Dev_SLP_adr);
 
 	if (~Buf_PRSTN[0] & 0x02)		//PRSTN B1
@@ -1135,9 +1115,9 @@ void Read_Register(uint8_t register_pointer, uint8_t* receive_buffer, uint16_t a
 {
 	//set pointer to register
 
-	HAL_I2C_Master_Transmit_DMA(&hi2c2, (adr_rep << 1), &register_pointer, 1);
+	HAL_I2C_Master_Transmit(&hi2c2, (adr_rep << 1), &register_pointer, 1, 10);
 	//receive data to receive_buffer
-	HAL_I2C_Master_Receive_DMA(&hi2c2, (adr_rep << 1), receive_buffer, 1);
+	HAL_I2C_Master_Receive(&hi2c2, (adr_rep << 1), receive_buffer, 1, 10);
 
 }
 
@@ -1196,26 +1176,27 @@ void UpdateLEDStates()
 					redBit = (i == 20) ? 7 : (i == 21) ? 5 : (i == 22) ? 3 : 0;
 				}
 			}
-
+			   uint8_t byteIndex = (i < 4 || (i >= 8 && i < 12) || (i >= 16 && i < 20)) ? 2 : 1;
 			// Управление светодиодами
 			if (disks[i].error) {
 				// Ошибка: красный светодиод горит постоянно
-				channel[redBit / 8 + 1] &= ~(1 << (redBit % 8)); // Включаем красный светодиод
+				channel[byteIndex] &= ~(1 << (redBit % 8)); // Включаем красный светодиод
 			} else if (disks[i].locate) {
 				// Локация: зеленый и красный светодиоды мигают
 				if (blinkState) {
-					channel[greenBit / 8 + 1] &= ~(1 << (greenBit % 8)); // Включаем зеленый светодиод
-					channel[redBit / 8 + 1] &= ~(1 << (redBit % 8)); // Включаем красный светодиод
+					channel[byteIndex] &= ~(1 << (greenBit % 8)); // Включаем зеленый светодиод
+					channel[byteIndex] &= ~(1 << (redBit % 8)); // Включаем красный светодиод
 				} else {
-					channel[greenBit / 8 + 1] |= (1 << (greenBit % 8));  // Выключаем зеленый светодиод
-					channel[redBit / 8 + 1] |= (1 << (redBit % 8));  // Выключаем красный светодиод
+					channel[byteIndex] |= (1 << (greenBit % 8));  // Выключаем зеленый светодиод
+					channel[byteIndex] |= (1 << (redBit % 8));  // Выключаем красный светодиод
 				}
 			} else if (disks[i].activity) {
 				// Активность: зеленый светодиод мигает
 				if (blinkState) {
-					channel[redBit / 8 + 1] &= ~(1 << (redBit % 8)); // Включаем красный светодиод
+					if(i )
+					channel[byteIndex] &= ~(1 << (greenBit % 8)); // Включаем красный светодиод
 				} else {
-					channel[redBit / 8 + 1] |= (1 << (redBit % 8));  // Выключаем красный светодиод
+					channel[byteIndex] |= (1 << (greenBit % 8));  // Выключаем красный светодиод
 				}
 			}
 		}
@@ -1337,9 +1318,11 @@ void PowerOnAdapter(uint8_t adapter_number)
 		ResetBus();
 		flag_update = 14;
 		if(BP_ON == 0) Led_Init();
+		Set_devslp();
 		HAL_TIM_Base_Start_IT(&htim1);
 		HAL_TIM_Base_Start_IT(&htim2);
 		HAL_TIM_Base_Start_IT(&htim3);
+		Counter_sgpio_timeout = 0;
 		StartBlinking(&led1, 2, 10000); // Мигание 2 Гц, 10 сек
 	} else if (adapter_number == 2 && adapter2_state != 1) {
 		HAL_GPIO_WritePin(CPU_PSON_GPIO_Port, CPU_PSON_Pin, SET);
@@ -1348,9 +1331,11 @@ void PowerOnAdapter(uint8_t adapter_number)
 		HAL_Delay(100);
 		ResetBus();
 		if(BP_ON == 0) Led_Init();
+		Set_devslp();
 		HAL_TIM_Base_Start_IT(&htim1);
 		HAL_TIM_Base_Start_IT(&htim2);
 		HAL_TIM_Base_Start_IT(&htim3);
+		Counter_sgpio_timeout = 0;
 		StartBlinking(&led2, 2, 10000); // Мигание 2 Гц, 10 сек
 	}
 	UpdateCPU_PSON(); // Обновляем состояние CPU_PSON
@@ -1383,7 +1368,10 @@ void UpdateCPU_PSON()
 
 void RebootAdapter(uint8_t adapter_number, uint8_t is_hard_reboot)
 {
+
 	PowerOffAdapter(adapter_number);
+	if (adapter_number == 1)StartBlinking(&led1, 4, 5000);
+	else StartBlinking(&led2, 4, 5000);// Мигание 4 Гц, 5 сек
 	HAL_Delay(is_hard_reboot ? 1000 : 500); // Задержка для hard/soft reboot
 	PowerOnAdapter(adapter_number);
 }
@@ -1393,6 +1381,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	if (htim->Instance == TIM1) // 8 раз в секунду
 	{
 		UpdateLEDStates();
+
 	} else
 		if (htim->Instance == TIM2) // 4 раза в секунду
 		{
@@ -1401,92 +1390,126 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			if (htim->Instance == TIM3) // 1 раз в секунду
 			{
 				Read_disks_connected();
+				if(sgpio_started == 0 && (adapter1_state == 1 || adapter2_state == 1))
+														{
+															++Counter_sgpio_timeout;
+															if (Counter_sgpio_timeout > 250 && sgpio_started == 0)
+															{
+																sgpio_timeout = 1;
+																HAL_TIM_Base_Stop_IT(&htim2);
+
+															}
+														}
 			}
+}
+
+void ProcessPins(uint8_t diskIndex)
+{
+
+	if (sgpio_started != 1 && disks[diskIndex].isConnected == 1)
+	{
+		GPIO_PinState activState = HAL_GPIO_ReadPin(diskPins[diskIndex].activPort, diskPins[diskIndex].activPin);
+
+		// Если состояние изменилось
+		if ((activState == GPIO_PIN_SET && previousActivity[diskIndex] == 0) ||
+				(activState == GPIO_PIN_RESET && previousActivity[diskIndex] == 1)) {
+			// Обновляем статус активности диска
+			disks[diskIndex].activity = 1;
+
+			// Обновляем статус диска
+			Update_Disk_Status(diskIndex, disks[diskIndex].activity, 0, 0);
+
+			// Сохраняем текущее состояние как предыдущее
+			previousActivity[diskIndex] = activState;
+			// Запускаем таймер на 5 секунд
+			activityTimer[diskIndex] = HAL_GetTick(); // Запоминаем текущее время
+		}
+	}
 }
 
 void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
 {
-    uint32_t current_time = HAL_GetTick();
+	uint32_t current_time = HAL_GetTick();
 
-    if (GPIO_Pin == FP_MB1_PWR_SW_Pin)
-    {
-        if (current_time - button1_debounce_time >= DEBOUNCE_DELAY)
-        {
-            button1_pressed = 0; // Кнопка отпущена
-            HandleButtonAction(1, current_time - button1_press_time);
-            button1_press_time = 0;
-            button1_debounce_time = current_time; // Обновляем время для обработки дребезга
-        }
-    }
+	if (GPIO_Pin == FP_MB1_PWR_SW_Pin)
+	{
+		if (current_time - button1_debounce_time >= DEBOUNCE_DELAY)
+		{
+			//  button1_pressed = 0; // Кнопка отпущена
+			HandleButtonAction(1, current_time - button1_press_time);
+			button1_press_time = 0;
+			button1_debounce_time = current_time; // Обновляем время для обработки дребезга
+		}
+	}
 
-    if (GPIO_Pin == FP_MB2_PWR_SW_Pin)
-    {
-        if (current_time - button2_debounce_time >= DEBOUNCE_DELAY)
-        {
-            button2_pressed = 0; // Кнопка отпущена
-            HandleButtonAction(2, current_time - button2_press_time);
-            button2_press_time = 0;
-            button2_debounce_time = current_time; // Обновляем время для обработки дребезга
-        }
-    }
+	if (GPIO_Pin == FP_MB2_PWR_SW_Pin)
+	{
+		if (current_time - button2_debounce_time >= DEBOUNCE_DELAY)
+		{
+			//  button2_pressed = 0; // Кнопка отпущена
+			HandleButtonAction(2, current_time - button2_press_time);
+			button2_press_time = 0;
+			button2_debounce_time = current_time; // Обновляем время для обработки дребезга
+		}
+	}
 }
 
 void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin)
 {
-    uint32_t current_time = HAL_GetTick();
+	uint32_t current_time = HAL_GetTick();
 
-    if (GPIO_Pin == FP_MB1_PWR_SW_Pin)
-    {
-        if (current_time - button1_debounce_time >= DEBOUNCE_DELAY)
-        {
-            button1_pressed = 1; // Кнопка нажата
-            button1_press_time = current_time;
-            button1_debounce_time = current_time; // Обновляем время для обработки дребезга
-        }
-    }
+	if (GPIO_Pin == FP_MB1_PWR_SW_Pin)
+	{
+		if (current_time - button1_debounce_time >= DEBOUNCE_DELAY)
+		{
+			// button1_pressed = 1; // Кнопка нажата
+			button1_press_time = current_time;
+			button1_debounce_time = current_time; // Обновляем время для обработки дребезга
+		}
+	}
 
-    if (GPIO_Pin == FP_MB2_PWR_SW_Pin)
-    {
-        if (current_time - button2_debounce_time >= DEBOUNCE_DELAY)
-        {
-            button2_pressed = 1; // Кнопка нажата
-            button2_press_time = current_time;
-            button2_debounce_time = current_time; // Обновляем время для обработки дребезга
-        }
-    }
+	if (GPIO_Pin == FP_MB2_PWR_SW_Pin)
+	{
+		if (current_time - button2_debounce_time >= DEBOUNCE_DELAY)
+		{
+			//  button2_pressed = 1; // Кнопка нажата
+			button2_press_time = current_time;
+			button2_debounce_time = current_time; // Обновляем время для обработки дребезга
+		}
+	}
 }
 
 /* USER CODE END 4 */
 
 /**
- * @brief  This function is executed in case of error occurrence.
- * @retval None
- */
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
 void Error_Handler(void)
 {
-	/* USER CODE BEGIN Error_Handler_Debug */
+  /* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
 	__disable_irq();
 	flag_error = 1;
 	while (1)
 	{
 	}
-	/* USER CODE END Error_Handler_Debug */
+  /* USER CODE END Error_Handler_Debug */
 }
 
 #ifdef  USE_FULL_ASSERT
 /**
- * @brief  Reports the name of the source file and the source line number
- *         where the assert_param error has occurred.
- * @param  file: pointer to the source file name
- * @param  line: assert_param error line source number
- * @retval None
- */
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
-	/* USER CODE BEGIN 6 */
+  /* USER CODE BEGIN 6 */
 	/* User can add his own implementation to report the file name and line number,
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-	/* USER CODE END 6 */
+  /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
