@@ -3981,7 +3981,7 @@ void HAL_TIM_IRQHandler(TIM_HandleTypeDef *htim)
     }
   }
   /* TIM Break input event */
-  if (((itflag & (TIM_FLAG_BREAK)) == (TIM_FLAG_BREAK)) || \
+   if (((itflag & (TIM_FLAG_BREAK)) == (TIM_FLAG_BREAK)) || \
       ((itflag & (TIM_FLAG_SYSTEM_BREAK)) == (TIM_FLAG_SYSTEM_BREAK)))
   {
     if ((itsource & (TIM_IT_BREAK)) == (TIM_IT_BREAK))
