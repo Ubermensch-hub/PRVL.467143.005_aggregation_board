@@ -1,0 +1,9 @@
+../Core/Src/led.c:22:6:Set_Led_On	16	static
+../Core/Src/led.c:30:6:Set_Led_Off	16	static
+../Core/Src/led.c:39:6:LED_Init	16	static
+../Core/Src/led.c:61:6:Set_Led	16	static
+../Core/Src/led.c:75:6:UpdateLEDStates	24	static
+../Core/Src/led.c:165:6:UpdateLEDs	24	static
+../Core/Src/led.c:200:6:SetLED	24	static
+../Core/Src/led.c:211:6:StartBlinking	24	static
+../Core/Src/led.c:221:6:StopBlinking	24	static

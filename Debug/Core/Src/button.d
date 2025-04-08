@@ -1,5 +1,4 @@
-Drivers/STM32G0xx_HAL_Driver/Src/stm32g0xx_hal_iwdg.o: \
- ../Drivers/STM32G0xx_HAL_Driver/Src/stm32g0xx_hal_iwdg.c \
+Core/Src/button.o: ../Core/Src/button.c ../Core/Inc/config.h \
  ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal.h \
  ../Core/Inc/stm32g0xx_hal_conf.h \
  ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_rcc.h \
@@ -27,11 +26,13 @@ Drivers/STM32G0xx_HAL_Driver/Src/stm32g0xx_hal_iwdg.o: \
  ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_flash_ex.h \
  ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_i2c.h \
  ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_i2c_ex.h \
- ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_iwdg.h \
  ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_pwr.h \
  ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_pwr_ex.h \
  ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_tim.h \
- ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_tim_ex.h
+ ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_tim_ex.h \
+ ../Core/Inc/main.h ../Core/Inc/adapter.h ../Core/Inc/config.h \
+ ../Core/Inc/button.h
+../Core/Inc/config.h:
 ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal.h:
 ../Core/Inc/stm32g0xx_hal_conf.h:
 ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_rcc.h:
@@ -59,8 +60,11 @@ Drivers/STM32G0xx_HAL_Driver/Src/stm32g0xx_hal_iwdg.o: \
 ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_flash_ex.h:
 ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_i2c.h:
 ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_i2c_ex.h:
-../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_iwdg.h:
 ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_pwr.h:
 ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_pwr_ex.h:
 ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_tim.h:
 ../Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal_tim_ex.h:
+../Core/Inc/main.h:
+../Core/Inc/adapter.h:
+../Core/Inc/config.h:
+../Core/Inc/button.h:

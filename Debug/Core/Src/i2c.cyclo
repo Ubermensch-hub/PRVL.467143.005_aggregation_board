@@ -1,0 +1,4 @@
+../Core/Src/i2c.c:11:6:ResetBus	1
+../Core/Src/i2c.c:33:6:Reset_sgpio_fan_bus	1
+../Core/Src/i2c.c:40:6:Read_Register	1
+../Core/Src/i2c.c:51:19:i2c_read	1

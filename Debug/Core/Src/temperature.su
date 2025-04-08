@@ -1,0 +1,3 @@
+../Core/Src/temperature.c:12:8:readTemperature	32	static
+../Core/Src/temperature.c:34:8:getMaxTemperature	24	static
+../Core/Src/temperature.c:41:6:TransmitTemperature	24	static

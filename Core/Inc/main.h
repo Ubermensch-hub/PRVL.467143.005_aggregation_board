@@ -57,16 +57,16 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define FP_MB1_PWRLED_Pin GPIO_PIN_11
-#define FP_MB1_PWRLED_GPIO_Port GPIOC
+#define FP_MB2_PWRLED_Pin GPIO_PIN_11
+#define FP_MB2_PWRLED_GPIO_Port GPIOC
 #define SGPIO_I2C2_RES_G_Pin GPIO_PIN_13
 #define SGPIO_I2C2_RES_G_GPIO_Port GPIOC
 #define SGPIO_I2C2_RES_Pin GPIO_PIN_14
 #define SGPIO_I2C2_RES_GPIO_Port GPIOC
 #define D_DRIVE4_ACTIVITY_Pin GPIO_PIN_15
 #define D_DRIVE4_ACTIVITY_GPIO_Port GPIOC
-#define FP_MB2_PWRLED_Pin GPIO_PIN_0
-#define FP_MB2_PWRLED_GPIO_Port GPIOC
+#define FP_MB1_PWRLED_Pin GPIO_PIN_0
+#define FP_MB1_PWRLED_GPIO_Port GPIOC
 #define B_DRIVE4_ACTIVITY_Pin GPIO_PIN_1
 #define B_DRIVE4_ACTIVITY_GPIO_Port GPIOC
 #define B_DRIVE3_ACTIVITY_Pin GPIO_PIN_2
@@ -121,12 +121,10 @@ void Error_Handler(void);
 #define D_DRIVE2_ACTIVITY_GPIO_Port GPIOA
 #define D_DRIVE3_ACTIVITY_Pin GPIO_PIN_12
 #define D_DRIVE3_ACTIVITY_GPIO_Port GPIOA
-#define FP_MB1_PWR_SW_Pin GPIO_PIN_15
-#define FP_MB1_PWR_SW_GPIO_Port GPIOA
-#define FP_MB1_PWR_SW_EXTI_IRQn EXTI4_15_IRQn
-#define FP_MB2_PWR_SW_Pin GPIO_PIN_8
-#define FP_MB2_PWR_SW_GPIO_Port GPIOC
-#define FP_MB2_PWR_SW_EXTI_IRQn EXTI4_15_IRQn
+#define FP_MB2_PWR_SW_Pin GPIO_PIN_15
+#define FP_MB2_PWR_SW_GPIO_Port GPIOA
+#define FP_MB1_PWR_SW_Pin GPIO_PIN_8
+#define FP_MB1_PWR_SW_GPIO_Port GPIOC
 #define SGPIO_I2C1_RES_Pin GPIO_PIN_9
 #define SGPIO_I2C1_RES_GPIO_Port GPIOC
 #define SGPIO_I2C1_RES_G_Pin GPIO_PIN_0

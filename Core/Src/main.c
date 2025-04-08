@@ -21,61 +21,28 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "config.h"
+#include "adapter.h"
+#include "led.h"
+#include "disk.h"
+#include "button.h"
+#include "temperature.h"
+#include "i2c.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef struct
-{
-	uint8_t isConnected;    // Флаг подключения (1 - подключен, 0 - не подключен)
-	uint8_t activity;       // Активность (1 - активен, 0 - не активен)
-	uint8_t error;          // Ошибка (1 - ошибка, 0 - нет ошибки)
-	uint8_t locate;         // Локация (1 - включена, 0 - выключена)
-} DiskStatus;
 
-typedef struct
+/*typedef struct
 {
 	GPIO_TypeDef *activPort;  // Порт для пина ACTIV
 	uint16_t activPin;        // Пин ACTIV
-} DiskPins;
-
-
-typedef enum {
-	BUTTON_STATE_PRESSED,
-	BUTTON_STATE_RELEASED,
-} ButtonState;
-
-ButtonState button1_state = BUTTON_STATE_RELEASED;
-ButtonState button2_state = BUTTON_STATE_RELEASED;
-
-typedef enum AdapterState
-{
-	PWR_OFF = 0b00,
-	PWR_ON = 0b01,
-	HARD_RESET = 0b11
-}AdapterState;
-
-typedef struct {
-	GPIO_TypeDef *GPIOx;       // Порт светодиода
-	uint16_t GPIO_Pin;         // Пин светодиода
-	uint32_t blink_start_time; // Время начала мигания
-	uint32_t blink_duration;   // Длительность мигания
-	uint32_t blink_period;     // Период мигания (в мс)
-	uint8_t is_blinking;       // Флаг мигания
-} LEDState;
-
-LEDState led1 = {FP_MB1_PWRLED_GPIO_Port, FP_MB1_PWRLED_Pin, 0, 0, 0, 0};
-LEDState led2 = {FP_MB2_PWRLED_GPIO_Port, FP_MB2_PWRLED_Pin, 0, 0, 0, 0};
+} DiskPins;*/
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define DEBOUNCE_DELAY 75 // Задержка для обработки дребезга (в мс)
-#define TEMP_REGISTER 0x00
-#define MAX7500_ADDR_1 0x94
-#define MAX7500_ADDR_2 0x92
-#define MAX_DISKS 24
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -88,26 +55,28 @@ I2C_HandleTypeDef hi2c2;
 DMA_HandleTypeDef hdma_i2c2_rx;
 DMA_HandleTypeDef hdma_i2c2_tx;
 
-IWDG_HandleTypeDef hiwdg;
-
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
+Button buttons[2] = {
+		{GPIOC, FP_MB1_PWR_SW_Pin, BUTTON_IDLE, 0, 1}, // Кнопка 1
+		{GPIOA, FP_MB2_PWR_SW_Pin, BUTTON_IDLE, 0, 2}  // Кнопка 2
+};
 
+LEDState leds[2] = {
+		{FP_MB1_PWRLED_GPIO_Port, FP_MB1_PWRLED_Pin, 1, 0, 0},
+		{FP_MB2_PWRLED_GPIO_Port, FP_MB2_PWRLED_Pin, 2, 0, 0}
+};
 
-//uint8_t flag_read = 0;
-uint8_t flag_error = 0;
-uint8_t flag_update = 0;
-uint8_t TempRxBuf = 0;//Буферы датчиков температуры
-uint8_t TempTxBuf = 0;
 int8_t temperature = 25;
+
 uint8_t disk_status[6] = {0}; // Буфер для приёма данных
 
 uint8_t Buf_PRSTN[2] = {0 , 0};
 
-uint8_t i2cbuff[3] = {0x06, 0x00, 0x00}; // Буфер инициализации каналов расширителя на output
+uint8_t i2cbuff_OUT[3] = {0x06, 0x00, 0x00}; // Буфер инициализации каналов расширителя на output
 uint8_t i2cbuff_IN[3] = {0x06, 0xAA, 0xAA}; // Буфер инициализации каналов расширителя на input (10101010,10101010)
 
 uint8_t I2CInit_off[2] = {0x0, 0x0}; //Буфер отключения каналов расширителя I2C
@@ -120,20 +89,14 @@ uint8_t I2CInit_2_3[2] = {0xC, 0x0}; //Буфер выбора второго и
 uint8_t ledbufON[3] = {0x02, 0x00, 0x00}; // Все 1 на выходе расширителя
 uint8_t ledbufOFF[3] = {0x02, 0xFF, 0xFF}; // Все 0 на выходе расширителя
 
-uint8_t LED_adr = 0x75; // адрес расширителей отвечающих за индикацию
-uint8_t Dev_SLP_adr = 0x77; // адрес расширителя отвечающего за devslp и prstn
-uint8_t I2C_EXPAND_adr = 0x74; // адрес свитча с каналами sgpio_i2c (индикация, prsnt, devslp)
-uint8_t I2C_adapter_adr = 0x73; // адрес свитча с каналами передачи данных на адаптер
-
 uint8_t Dev_SLP_ON[3] = {0x02, 0xAA, 0xAA}; // "10101010", "10101010" (dev_slp_position)
-const uint8_t prstn_masks[4] = {0x02, 0x08, 0x20, 0x80};
 
 uint8_t channel_one[3] = {0x02, 0xFF, 0xFF};//буферы каналов sgpio
 uint8_t channel_two[3] = {0x02, 0xFF, 0xFF};
 uint8_t channel_three[3] = {0x02, 0xFF, 0xFF};
 
 DiskStatus disks[MAX_DISKS] = {0}; // Массив для хранения статусов всех дисков
-DiskPins diskPins[MAX_DISKS]; // Массив для хранения пинов всех дисков
+//DiskPins diskPins[MAX_DISKS]; // Массив для хранения пинов всех дисков
 
 uint8_t MB1_attach = 1;// переменные для управления адаптерами
 uint8_t MB2_attach = 1;
@@ -154,17 +117,13 @@ uint8_t hotswap_mb2 = 0;
 uint8_t MB_ON_1 = 0;
 uint8_t MB_ON_2 = 0;
 
-AdapterState adapter1_command = PWR_OFF;
-AdapterState adapter2_command = PWR_OFF;
-
-uint8_t sgpio_started = 0; // Начало передачи sgpio
-uint8_t Counter_sgpio_timeout = 0; // счётчик sgpio обнраружения sgpio
-uint8_t sgpio_timeout = 0; // sgpio не обнаружен по времени
+uint8_t btn_handler = 0;
 uint8_t previousActivity[MAX_DISKS] = {0}; // Массив для хранения предыдущего состояния активности
 uint32_t activityTimer[MAX_DISKS] = {0}; // Массив для хранения времени последнего изменения активности
 
-
-
+uint32_t connectActivityTimer[MAX_DISKS] = {0}; // Таймеры для сброса активности при подключении
+uint8_t cold_start = 1;
+uint8_t is_launching = 0;
 volatile uint8_t button1_pressed = 0; // Флаг нажатия кнопки 1
 volatile uint8_t button2_pressed = 0; // Флаг нажатия кнопки 2
 volatile uint32_t button1_press_time = 0; // Время нажатия кнопки 1
@@ -181,179 +140,26 @@ static void MX_I2C2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
-static void MX_IWDG_Init(void);
 static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
-void Set_devslp(); // функция должна выставить на все регистры DevSLP = 0
-void Read_Register(uint8_t register_pointer, uint8_t* receive_buffer, uint16_t adr_rep);
-void Initialize_Disks();
-void Update_Disk_Status(uint8_t diskIndex, uint8_t activity, uint8_t error, uint8_t locate);
-void Process_SGPIO_Data(uint16_t sgpioData, uint8_t startIndex);
-void Set_Led();
-void Set_Led_On();
-void Set_Led_Off();
-int8_t readTemperature(uint8_t address);
-int8_t getMaxTemperature();
-void UpdateDriveStatus(uint8_t drive_index, uint8_t prstn_bit, uint8_t buf_value);
-void UpdateLEDStates();
-void ResetBus();
-void Led_Init();
-void InitializeDiskPins();
-
-void PowerOnAdapter(uint8_t adapter_number);
-void PowerOffAdapter(uint8_t adapter_number);
-void UpdateCPU_PSON();
-void RebootAdapter(uint8_t adapter_number);
-void ProcessPins(uint8_t diskIndex);
-void Read_disks_connected();
-void HardResetAdapter(uint8_t adapter_number);
-void TransmitTemperature();
-HAL_StatusTypeDef i2c_read(uint8_t dev_addr, uint8_t reg_addr, uint8_t *data, uint8_t len) {
-	// Чтение данных из регистра reg_addr устройства с адресом dev_addr
-	return HAL_I2C_Mem_Read(&hi2c2, dev_addr, reg_addr, I2C_MEMADD_SIZE_8BIT, data, len, HAL_MAX_DELAY);
-}
-
-void UpdateLED(LEDState *led)
+//void InitializeDiskPins();
+void ProcessCondition()
 {
-	if (led->is_blinking) {
-		uint32_t current_time = HAL_GetTick();
-		uint32_t elapsed_time = current_time - led->blink_start_time;
-
-		if (elapsed_time < led->blink_duration) {
-			// Мигание
-			if (elapsed_time % led->blink_period < led->blink_period / 2) {
-				HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, SET);
-			} else {
-				HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, RESET);
-			}
-		} else {
-			// Завершение мигания
-			HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, RESET);
-			led->is_blinking = 0;
-		}
-	} else if ((adapter1_state == 1 && MB1_attach == 0) || (adapter2_state == 1 && MB2_attach == 0))
-	{
-		if(adapter1_state == 1 && led->GPIO_Pin == FP_MB1_PWRLED_Pin && MB1_attach == 0) HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, SET);
-		if(adapter2_state == 1 && led->GPIO_Pin == FP_MB2_PWRLED_Pin && MB2_attach == 0) HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, SET);
-	}
-	if (MB1_attach == 1 && led->GPIO_Pin == FP_MB1_PWRLED_Pin){
-		HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, RESET);
-	}else if (adapter1_state == 0 && led->GPIO_Pin == FP_MB1_PWRLED_Pin)
-	{
-		HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, RESET);
-	}
-	if (MB2_attach == 1 && led->GPIO_Pin == FP_MB2_PWRLED_Pin){
-		HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, RESET);
-	}else if (adapter2_state == 0 && led->GPIO_Pin == FP_MB2_PWRLED_Pin)
-	{
-		HAL_GPIO_WritePin(led->GPIOx, led->GPIO_Pin, RESET);
-	}
-
-
-}
-
-void StartBlinking(LEDState *led, uint32_t frequency, uint32_t duration)
-{
-	led->blink_period = 1000 / frequency; // Период мигания в мс
-	led->blink_duration = duration;       // Длительность мигания
-	led->blink_start_time = HAL_GetTick(); // Время начала мигания
-	led->is_blinking = 1;                 // Включить мигание
-}
-
-void HandleButtonAction(uint8_t button_number, uint32_t press_duration)
-{
-	HAL_GPIO_WritePin(MB1_STATUS_LED_GPIO_Port, MB1_STATUS_LED_Pin, SET);
-	HAL_GPIO_WritePin(MB2_STATUS_LED_GPIO_Port, MB2_STATUS_LED_Pin, SET);
-	if (button_number == 1) {
-		if (press_duration <= 2000) {
-			// Короткое нажатие (0-1 сек) - включение адаптера 1
-			PowerOnAdapter(1);
-		} else if (press_duration <= 5000) {
-			// Долгое нажатие (3-6 сек) - жесткая перезагрузка адаптера 1
-			HardResetAdapter(1);
-
-		} else if (press_duration > 5000) {
-			// Очень долгое нажатие (6-10 сек) - выключение адаптера 1
-			PowerOffAdapter(1);
-		}
-	} else if (button_number == 2) {
-		if (press_duration <= 2000) {
-			// Короткое нажатие (0-1 сек) - включение адаптера 1
-			PowerOnAdapter(2);
-		} else if (press_duration <= 5000) {
-			// Долгое нажатие (3-6 сек) - жесткая перезагрузка адаптера 1
-			HardResetAdapter(2);
-
-		} else if (press_duration > 5000) {
-			// Очень долгое нажатие (6-10 сек) - выключение адаптера 1
-			PowerOffAdapter(2);
-		}
-	}
-	HAL_Delay(500);
-	HAL_GPIO_WritePin(MB1_STATUS_LED_GPIO_Port, MB1_STATUS_LED_Pin, RESET);
-	HAL_GPIO_WritePin(MB2_STATUS_LED_GPIO_Port, MB2_STATUS_LED_Pin, RESET);
-	HAL_TIM_Base_Start_IT(&htim3);
-}
-
-void UpdateDiskStatus(uint8_t diskIndex, uint8_t activity, uint8_t error, uint8_t locate) //функция для обновления данных о дисках
-{
-	disks[diskIndex].activity = activity;
-	disks[diskIndex].error = error;
-	disks[diskIndex].locate = locate;
-}
-
-void Read_Disk_Status(uint16_t slave_address, uint8_t *data, uint16_t size) {
-	uint8_t flag = 0 ;
-	if(MB1_attach == 0 && MB2_attach == 0)
-	{
-		if(flag)
+	if (MB1_attach == 0) {
+		if (HAL_GPIO_ReadPin(MB1_BITCH_GPIO_Port, MB1_BITCH_Pin) == 1)
 		{
-			HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_0, 1, 500);
-			HAL_Delay(50);
-			HAL_I2C_Master_Receive(&hi2c2, slave_address << 1, data, size, 500);
-			flag = 0;
-		} else {
-			HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_1, 1, 500);
-			HAL_Delay(50);
-			HAL_I2C_Master_Receive(&hi2c2, slave_address << 1, data, size, 500);
-			flag = 1;
-		}
-
-	}else if ( MB1_attach == 0 && adapter1_state == 1){
-		HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_0, 1, HAL_MAX_DELAY);
-		HAL_Delay(50);
-		HAL_I2C_Master_Receive(&hi2c2, slave_address << 1, data, size, HAL_MAX_DELAY);
-	} else if (MB2_attach == 0 && adapter2_state == 1){
-		HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_1, 1, HAL_MAX_DELAY);
-		HAL_Delay(50);
-		HAL_I2C_Master_Receive(&hi2c2, slave_address << 1, data, size, HAL_MAX_DELAY);
-	}else {}
-}
-
-void Decode_Disk_Status(uint8_t *data) {
-	for (uint8_t disk_id = 0; disk_id < 24; disk_id++) {
-		uint8_t byte_index = disk_id / 4; // �?ндекс байта
-		uint8_t bit_offset = (disk_id % 4) * 2; // Смещение в байте
-		uint8_t status = (data[byte_index] >> bit_offset) & 0x03; // �?звлечение статуса
-
-		// Декодирование статуса
-		switch (status) {
-		case 0x00:
-			UpdateDiskStatus(disk_id, 0, 0, 0);
-			break;
-		case 0x01:
-			UpdateDiskStatus(disk_id, 1, 0, 0);
-			break;
-		case 0x02:
-			UpdateDiskStatus(disk_id, 0, 0, 1);
-			break;
-		case 0x03:
-			UpdateDiskStatus(disk_id, 0, 1, 0);
-			break;
-		default:
-			break;
-		}
+			adapter1_state = 0;}
+		else adapter1_state = 1;
 	}
+
+	if (MB2_attach == 0) {
+		if (HAL_GPIO_ReadPin(MB2_BITCH_GPIO_Port, MB2_BITCH_Pin) == 1)
+		{
+			adapter2_state = 0;
+		}else adapter2_state = 1;
+	}
+	MB1_attach = HAL_GPIO_ReadPin(MB1_ATTACH_GPIO_Port, MB1_ATTACH_Pin);
+	MB2_attach = HAL_GPIO_ReadPin(MB2_ATTACH_GPIO_Port, MB2_ATTACH_Pin);
 }
 
 /* USER CODE END PFP */
@@ -369,7 +175,7 @@ uint8_t     transmit_temperature_flag = 0;
 
 uint8_t     read_disks_connected_flag = 0;
 
-
+uint8_t flag = 0 ;
 /* USER CODE END 0 */
 
 /**
@@ -406,7 +212,6 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM1_Init();
   MX_TIM2_Init();
- // MX_IWDG_Init();
 
   /* Initialize interrupts */
   MX_NVIC_Init();
@@ -417,19 +222,16 @@ int main(void)
 	HAL_Delay(500);
 	HAL_NVIC_SetPriority(EXTI4_15_IRQn, 1, 0);
 	HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
-
-	InitializeDiskPins();
+	ResetBus();
+	//InitializeDiskPins();
 
 	Initialize_Disks();
-	ResetBus();
+
 	Set_devslp();
-	HAL_TIM_Base_Start_IT(&htim1);
-	Set_devslp();
-	HAL_TIM_Base_Start_IT(&htim2);
-	Set_devslp();
+	HAL_Delay(250);
+	Read_disks_connected(); // Чтение подключенных дисков
+	HAL_Delay(250);
 	HAL_TIM_Base_Start_IT(&htim3);
-	Set_devslp();
-	HAL_IWDG_Refresh(&hiwdg);
 
   /* USER CODE END 2 */
 
@@ -440,73 +242,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-		if (update_led_flag) {
-			update_led_flag = 0;
-			UpdateLEDStates(); // Обновление состояния светодиодов
-		}
-
-		if (read_disk_status_flag) {
-			read_disk_status_flag = 0;
-			Read_Disk_Status(0x24, disk_status, 6); // Чтение статуса дисков
-			Decode_Disk_Status(disk_status); // Декодирование статуса
-		}
-
-		if (transmit_temperature_flag) {
-			transmit_temperature_flag = 0;
-			TransmitTemperature(); // Передача температуры
-		}
-
-		if (read_disks_connected_flag) {
-			read_disks_connected_flag = 0;
-			Read_disks_connected(); // Чтение подключенных дисков
-		}
-		// Обновление состояния светодиодов
-		UpdateLED(&led1);
-		UpdateLED(&led2);
-
-
-		button1_state = HAL_GPIO_ReadPin(FP_MB1_PWR_SW_GPIO_Port, FP_MB1_PWR_SW_Pin);
-		button2_state = HAL_GPIO_ReadPin(FP_MB2_PWR_SW_GPIO_Port, FP_MB2_PWR_SW_Pin);
-		MB1_attach = HAL_GPIO_ReadPin(MB1_ATTACH_GPIO_Port, MB1_ATTACH_Pin);
-		MB2_attach = HAL_GPIO_ReadPin(MB2_ATTACH_GPIO_Port, MB2_ATTACH_Pin);
-
-		if (button1_pressed && button1_state == BUTTON_STATE_RELEASED) {
-			HandleButtonAction(1, HAL_GetTick() - button1_press_time);
-			button1_pressed = 0;
-		}
-		if (button2_pressed && button2_state == BUTTON_STATE_RELEASED) {
-			HandleButtonAction(2, HAL_GetTick() - button2_press_time);
-			button2_pressed = 0;
-		}
-
-		temperature = getMaxTemperature();
-
-		if (MB1_attach == 0) {
-			if (HAL_GPIO_ReadPin(MB1_BITCH_GPIO_Port, MB1_BITCH_Pin) == 1)
-			{
-				adapter1_state = 0;}
-			else adapter1_state = 1;
-		}
-
-		if (MB2_attach == 0) {
-			if (HAL_GPIO_ReadPin(MB2_BITCH_GPIO_Port, MB2_BITCH_Pin) == 1)
-			{
-				adapter2_state = 0;
-			}else adapter2_state = 1;
-		}
-		/*for (int i = 0; i < MAX_DISKS; ++i)
-		{
-			ProcessPins(i);  // Обновляем статус каждого диска
-			if (disks[i].activity == 1 && (HAL_GetTick() - activityTimer[i] >= 5000) && sgpio_started != 1) {
-				// Сбрасываем активность
-				disks[i].activity = 0;
-				Update_Disk_Status(i, disks[i].activity, disks[i].error, disks[i].locate);
-			}
-		}*/
-		HAL_IWDG_Refresh(&hiwdg);
-		// Обновление состояния CPU_PSON
-		//UpdateCPU_PSON();
+		HandleButtons();//buttons
+		ProcessCondition();
+		UpdateLEDs();
 
 
 
@@ -532,9 +270,8 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV1;
@@ -577,9 +314,6 @@ static void MX_NVIC_Init(void)
   /* DMA1_Channel2_3_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel2_3_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel2_3_IRQn);
-  /* TIM1_BRK_UP_TRG_COM_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(TIM1_BRK_UP_TRG_COM_IRQn, 2, 0);
-  HAL_NVIC_EnableIRQ(TIM1_BRK_UP_TRG_COM_IRQn);
   /* TIM2_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(TIM2_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(TIM2_IRQn);
@@ -607,7 +341,7 @@ static void MX_I2C2_Init(void)
 
   /* USER CODE END I2C2_Init 1 */
   hi2c2.Instance = I2C2;
-  hi2c2.Init.Timing = 0x20500C21;
+  hi2c2.Init.Timing = 0x00F12163;
   hi2c2.Init.OwnAddress1 = 0;
   hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -622,7 +356,7 @@ static void MX_I2C2_Init(void)
 
   /** Configure Analogue filter
   */
-  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_DISABLE) != HAL_OK)
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
   {
     Error_Handler();
   }
@@ -636,35 +370,6 @@ static void MX_I2C2_Init(void)
   /* USER CODE BEGIN I2C2_Init 2 */
 
   /* USER CODE END I2C2_Init 2 */
-
-}
-
-/**
-  * @brief IWDG Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_IWDG_Init(void)
-{
-
-  /* USER CODE BEGIN IWDG_Init 0 */
-
-  /* USER CODE END IWDG_Init 0 */
-
-  /* USER CODE BEGIN IWDG_Init 1 */
-
-  /* USER CODE END IWDG_Init 1 */
-  hiwdg.Instance = IWDG;
-  hiwdg.Init.Prescaler = IWDG_PRESCALER_128;
-  hiwdg.Init.Window = 4095;
-  hiwdg.Init.Reload = 4000;
-  if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN IWDG_Init 2 */
-
-  /* USER CODE END IWDG_Init 2 */
 
 }
 
@@ -835,7 +540,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, FP_MB1_PWRLED_Pin|FP_MB2_PWRLED_Pin|CPU_PSON_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, FP_MB2_PWRLED_Pin|FP_MB1_PWRLED_Pin|CPU_PSON_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, SGPIO_I2C2_RES_G_Pin|SGPIO_I2C2_RES_Pin|SGPIO_I2C1_RES_Pin, GPIO_PIN_SET);
@@ -849,9 +554,9 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, SGPIO_I2C1_RES_G_Pin|TEMP_I2C2_RES_Pin|TEMP_I2C1_RES_Pin, GPIO_PIN_SET);
 
-  /*Configure GPIO pins : FP_MB1_PWRLED_Pin SGPIO_I2C2_RES_G_Pin SGPIO_I2C2_RES_Pin FP_MB2_PWRLED_Pin
+  /*Configure GPIO pins : FP_MB2_PWRLED_Pin SGPIO_I2C2_RES_G_Pin SGPIO_I2C2_RES_Pin FP_MB1_PWRLED_Pin
                            CPU_PSON_Pin SGPIO_I2C1_RES_Pin */
-  GPIO_InitStruct.Pin = FP_MB1_PWRLED_Pin|SGPIO_I2C2_RES_G_Pin|SGPIO_I2C2_RES_Pin|FP_MB2_PWRLED_Pin
+  GPIO_InitStruct.Pin = FP_MB2_PWRLED_Pin|SGPIO_I2C2_RES_G_Pin|SGPIO_I2C2_RES_Pin|FP_MB1_PWRLED_Pin
                           |CPU_PSON_Pin|SGPIO_I2C1_RES_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -904,17 +609,17 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : FP_MB1_PWR_SW_Pin */
-  GPIO_InitStruct.Pin = FP_MB1_PWR_SW_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(FP_MB1_PWR_SW_GPIO_Port, &GPIO_InitStruct);
-
   /*Configure GPIO pin : FP_MB2_PWR_SW_Pin */
   GPIO_InitStruct.Pin = FP_MB2_PWR_SW_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(FP_MB2_PWR_SW_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : FP_MB1_PWR_SW_Pin */
+  GPIO_InitStruct.Pin = FP_MB1_PWR_SW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(FP_MB1_PWR_SW_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : SGPIO_I2C1_RES_G_Pin TEMP_I2C2_RES_Pin TEMP_I2C1_RES_Pin */
   GPIO_InitStruct.Pin = SGPIO_I2C1_RES_G_Pin|TEMP_I2C2_RES_Pin|TEMP_I2C1_RES_Pin;
@@ -923,450 +628,55 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 1, 0);
-  HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
-
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
-void Set_devslp()
+
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-	while (HAL_I2C_IsDeviceReady(&hi2c2, I2C_EXPAND_adr << 1, 3, 100) != HAL_OK);
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_0, 1, HAL_MAX_DELAY); //DevSLP  0 канал (E/F)
-	HAL_Delay(5);
-
-	HAL_I2C_Master_Transmit(&hi2c2, (Dev_SLP_adr << 1), i2cbuff_IN, 3, HAL_MAX_DELAY); // init input
-	HAL_Delay(5);
-
-	HAL_I2C_Master_Transmit(&hi2c2, (Dev_SLP_adr << 1), Dev_SLP_ON, 3, HAL_MAX_DELAY); //write
-	HAL_Delay(5);
-
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_1, 1, HAL_MAX_DELAY); //DevSLP  1 канал (C/D)
-	HAL_Delay(5);
-
-	HAL_I2C_Master_Transmit(&hi2c2, (Dev_SLP_adr << 1), i2cbuff_IN, 3, HAL_MAX_DELAY);
-	HAL_Delay(5);
-
-	HAL_I2C_Master_Transmit(&hi2c2, (Dev_SLP_adr << 1), Dev_SLP_ON, 3, HAL_MAX_DELAY);
-	HAL_Delay(5);
-
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_2, 1, HAL_MAX_DELAY); //DevSLP  2 канал (A/B)
-	HAL_Delay(5);
-
-	HAL_I2C_Master_Transmit(&hi2c2, (Dev_SLP_adr << 1), i2cbuff_IN, 3, HAL_MAX_DELAY);
-	HAL_Delay(5);
-
-	HAL_I2C_Master_Transmit(&hi2c2, (Dev_SLP_adr << 1), Dev_SLP_ON, 3, HAL_MAX_DELAY);
-	HAL_Delay(5);
-}
-
-void Initialize_Disks()
-{
-	for (int i = 0; i < MAX_DISKS; ++i) {
-		disks[i].isConnected = 0;
-		disks[i].activity = 0;
-		disks[i].error = 0;
-		disks[i].locate = 0;
-	}
-}
-
-void Update_Disk_Status(uint8_t diskIndex, uint8_t activity, uint8_t error, uint8_t locate)
-{
-	disks[diskIndex].activity = activity;
-	disks[diskIndex].error = error;
-	disks[diskIndex].locate = locate;
-}
-
-
-
-void ResetBus()
-{
-	flag_update = 10;
-	HAL_GPIO_WritePin(TEMP_I2C1_RES_GPIO_Port, TEMP_I2C1_RES_Pin, RESET);
-	HAL_GPIO_WritePin(SGPIO_I2C1_RES_G_GPIO_Port, SGPIO_I2C1_RES_G_Pin, RESET);
-	HAL_GPIO_WritePin(SGPIO_I2C1_RES_GPIO_Port, SGPIO_I2C1_RES_Pin, RESET);
-	HAL_GPIO_WritePin(SGPIO_I2C3RES_G_GPIO_Port, SGPIO_I2C3RES_G_Pin, RESET);
-	HAL_GPIO_WritePin(SGPIO_I2C3_RES_GPIO_Port, SGPIO_I2C3_RES_Pin, RESET);
-	HAL_GPIO_WritePin(SGPIO_I2C2_RES_GPIO_Port, SGPIO_I2C2_RES_Pin, RESET);
-	HAL_GPIO_WritePin(SGPIO_I2C2_RES_G_GPIO_Port, SGPIO_I2C2_RES_G_Pin, RESET);
-	HAL_GPIO_WritePin(TEMP_I2C2_RES_GPIO_Port, TEMP_I2C2_RES_Pin, RESET);
-
-	flag_update = 11;
-	HAL_GPIO_WritePin(TEMP_I2C1_RES_GPIO_Port, TEMP_I2C1_RES_Pin, SET);
-	HAL_GPIO_WritePin(SGPIO_I2C1_RES_G_GPIO_Port, SGPIO_I2C1_RES_G_Pin, SET);
-	HAL_GPIO_WritePin(SGPIO_I2C1_RES_GPIO_Port, SGPIO_I2C1_RES_Pin, SET);
-	HAL_GPIO_WritePin(SGPIO_I2C3RES_G_GPIO_Port, SGPIO_I2C3RES_G_Pin, SET);
-	HAL_GPIO_WritePin(SGPIO_I2C3_RES_GPIO_Port, SGPIO_I2C3_RES_Pin, SET);
-	HAL_GPIO_WritePin(SGPIO_I2C2_RES_GPIO_Port, SGPIO_I2C2_RES_Pin, SET);
-	HAL_GPIO_WritePin(SGPIO_I2C2_RES_G_GPIO_Port, SGPIO_I2C2_RES_G_Pin, SET);
-	HAL_GPIO_WritePin(TEMP_I2C2_RES_GPIO_Port, TEMP_I2C2_RES_Pin, SET);
-
-}
-
-void Set_Led()
-{
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_0, 1, 10);
-	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), i2cbuff, 3, 10);
-	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), channel_one, 3, 10);
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_1, 1, 10);
-	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), i2cbuff, 3, 10);
-	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), channel_two, 3, 10);
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_2, 1, 10);
-	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), i2cbuff, 3, 10);
-	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), channel_three, 3, 10);
-}
-
-void Set_Led_On()
-{
-	flag_update = 5;
-
-	if (HAL_I2C_IsDeviceReady(&hi2c2, LED_adr << 1, 3, 100) == HAL_OK) {
-		HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), i2cbuff, 3, 10);
-	} else {
-		flag_update = 7;
-	}
-
-
-	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), ledbufON, 3, 10);
-}
-
-void Set_Led_Off()
-{
-
-	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), i2cbuff, 3, 10);
-
-	HAL_I2C_Master_Transmit(&hi2c2, (LED_adr << 1), ledbufOFF, 3, 10);
-
-}
-void Led_Init()
-{
-
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_0, 1, 10);
-	Set_Led_On();
-	HAL_Delay(400);
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_1, 1, 10);
-	Set_Led_On();
-	HAL_Delay(400);
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_2, 1, 10);
-	Set_Led_On();
-	HAL_Delay(400);
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_0, 1, 10);
-	Set_Led_Off();
-	HAL_Delay(400);
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_1, 1, 10);
-	Set_Led_Off();
-	HAL_Delay(400);
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_2, 1, 10);
-	Set_Led_Off();
-	HAL_Delay(400);
-
-}
-
-// Функция для чтения температуры с датчика (возвращает температуру в десятых долях градуса)
-int8_t readTemperature(uint8_t address) {
-	uint8_t data[2];
-	// Чтение двух байтов из регистра температуры
-	i2c_read(address, TEMP_REGISTER, data, 2);
-
-	// Объединение двух байтов в 16-битное значение
-	int16_t tempData = (data[0] << 8) | data[1];
-
-	// �?звлечение знакового бита
-	uint8_t isNegative = (tempData & 0x8000) != 0;
-
-	// �?звлечение целой части температуры
-	int8_t integerPart = (tempData >> 8) & 0x7F;
-
-	// Учет отрицательной температуры
-	if (isNegative) {
-		integerPart = -integerPart;
-	}
-
-	return integerPart;
-}
-// Функция для получения максимальной температуры
-int8_t getMaxTemperature() {
-	int8_t temp1 = readTemperature(MAX7500_ADDR_1);
-	int8_t temp2 = readTemperature(MAX7500_ADDR_2);
-
-	return (temp1 > temp2) ? temp1 : temp2;
-}
-
-
-void Read_disks_connected()
-{
-
-
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_0, 1, 10);
-	Read_Register(0x01, Buf_PRSTN, Dev_SLP_adr);
-
-
-	if (~Buf_PRSTN[0] & 0x02)		//PRSTN F1
+	if (htim->Instance == TIM1 && btn_handler == 0) // 8 раз в секунду
 	{
-		disks[0].isConnected = 1;
-	} else {
-		disks[0].isConnected = 0;
-	}
-
-	if (~Buf_PRSTN[0] & 0x08)		//PRSTN F2
-	{
-		disks[1].isConnected = 1;
-	} else {
-		disks[1].isConnected = 0;
-	}
-
-	if (~Buf_PRSTN[0] & 0x20)		//PRSTN F3
-	{
-		disks[2].isConnected = 1;
-	} else {
-		disks[2].isConnected = 0;
-	}
-	if (~Buf_PRSTN[0] & 0x80)		//PRSTN F4
-	{
-		disks[3].isConnected = 1;
-	} else {
-		disks[3].isConnected = 0;
-	}
-
-	Read_Register(0x00, Buf_PRSTN, Dev_SLP_adr);
-
-	if (~Buf_PRSTN[0] & 0x02)		//PRSTN E1
-	{
-		disks[4].isConnected = 1;
-	} else {
-		disks[4].isConnected = 0;
-	}
-
-	if (~Buf_PRSTN[0] & 0x08)		//PRSTN E2
-	{
-		disks[5].isConnected = 1;
-	} else {
-		disks[5].isConnected = 0;
-	}
-
-	if (~Buf_PRSTN[0] & 0x20)		//PRSTN E3
-	{
-		disks[6].isConnected = 1;
-	} else {
-		disks[6].isConnected = 0;
-	}
-
-	if (~Buf_PRSTN[0] & 0x80)		//PRSTN E4
-
-	{
-		disks[7].isConnected = 1;
-	} else {
-		disks[7].isConnected = 0;
-	}
-
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_1, 1, 10);
-	Read_Register(0x01, Buf_PRSTN, Dev_SLP_adr);
-
-	if (~Buf_PRSTN[0] & 0x02)		//PRSTN D1
-	{
-		disks[8].isConnected = 1;
-	} else {
-		disks[8].isConnected = 0;
-	}
-	if (~Buf_PRSTN[0] & 0x08)		//PRSTN D2
-	{
-		disks[9].isConnected = 1;
-	} else {
-		disks[9].isConnected = 0;
-	}
-	if (~Buf_PRSTN[0] & 0x20)		//PRSTN D3
-	{
-		disks[10].isConnected = 1;
-	} else {
-		disks[10].isConnected = 0;
-	}
-	if (~Buf_PRSTN[0] & 0x80)		//PRSTN D4
-	{
-		disks[11].isConnected = 1;
-	} else {
-		disks[11].isConnected = 0;
-	}
-	Read_Register(0x00, Buf_PRSTN, Dev_SLP_adr);
-
-	if (~Buf_PRSTN[0] & 0x02)		//PRSTN C1
-	{
-		disks[12].isConnected = 1;
-	} else {
-		disks[12].isConnected = 0;
-	}
-	if (~Buf_PRSTN[0] & 0x08)		//PRSTN C2
-	{
-		disks[13].isConnected = 1;
-	} else {
-		disks[13].isConnected = 0;
-	}
-	if (~Buf_PRSTN[0] & 0x20)		//PRSTN C3
-	{
-		disks[14].isConnected = 1;
-	} else {
-		disks[14].isConnected = 0;
-	}
-
-	if (~Buf_PRSTN[0] & 0x80)		//PRSTN C4
-	{
-		disks[15].isConnected = 1;
-	} else {
-		disks[15].isConnected = 0;
-	}
-
-	HAL_I2C_Master_Transmit(&hi2c2, (I2C_EXPAND_adr << 1), I2CInit_2, 1, 10);
-	Read_Register(0x01, Buf_PRSTN, Dev_SLP_adr);
-
-	if (~Buf_PRSTN[0] & 0x02)		//PRSTN B1
-	{
-		disks[16].isConnected = 1;
-	} else {
-		disks[16].isConnected = 0;
-	}
-
-	if (~Buf_PRSTN[0] & 0x08)		//PRSTN B2
-	{
-		disks[17].isConnected = 1;
-	} else {
-		disks[17].isConnected = 0;
-	}
-	if (~Buf_PRSTN[0] & 0x20)		//PRSTN B3
-	{
-		disks[18].isConnected = 1;
-	} else {
-		disks[18].isConnected = 0;
-	}
-	if (~Buf_PRSTN[0] & 0x80)		//PRSTN B4
-	{
-		disks[19].isConnected = 1;
-	} else {
-		disks[19].isConnected = 0;
-	}
-	Read_Register(0x00, Buf_PRSTN, Dev_SLP_adr);
-
-	if (~Buf_PRSTN[0] & 0x02)		//PRSTN A1
-	{
-		disks[20].isConnected = 1;
-	} else {
-		disks[20].isConnected = 0;
-	}
-	if (~Buf_PRSTN[0] & 0x08)		//PRSTN A2
-	{
-		disks[21].isConnected = 1;
-	} else {
-		disks[21].isConnected = 0;
-	}
-	if (~Buf_PRSTN[0] & 0x20)		//PRSTN A3
-	{
-		disks[22].isConnected = 1;
-	} else {
-		disks[22].isConnected = 0;
-	}
-	if (~Buf_PRSTN[0] & 0x80)		//PRSTN A4
-	{
-		disks[23].isConnected = 1;
-	} else {
-		disks[23].isConnected = 0;
-	}
-}
-
-void Read_Register(uint8_t register_pointer, uint8_t* receive_buffer, uint16_t adr_rep)
-{
-	//set pointer to register
-
-	HAL_I2C_Master_Transmit(&hi2c2, (adr_rep << 1), &register_pointer, 1, 10);
-	//receive data to receive_buffer
-	HAL_I2C_Master_Receive(&hi2c2, (adr_rep << 1), receive_buffer, 1, 10);
-
-}
-
-void UpdateLEDStates()
-{
-	static uint8_t blinkState = 0; // Состояние мигания (0 или 1)
-	blinkState = !blinkState;     // �?нвертируем состояние каждые 125 мс (4 Гц)
-
-	// Очищаем буферы каналов
-
-
-	// Обновляем состояние светодиодов для каждого диска
-	for (int i = 0; i < MAX_DISKS; ++i) {
-		if (disks[i].isConnected) {
-			// Определяем, какой канал использовать
-			uint8_t *channel;
-			uint8_t greenBit;
-			uint8_t redBit;
-
-			if (i < 8) {
-				channel = channel_one;
-				if (i < 4) {
-					// Диски 0-3: первый байт
-					greenBit = (i == 0) ? 6 : (i == 1) ? 4 : (i == 2) ? 2 : 1;
-					redBit = (i == 0) ? 7 : (i == 1) ? 5 : (i == 2) ? 3 : 0;
-				} else {
-					// Диски 4-7: второй байт
-					greenBit = (i == 4) ? 7 : (i == 5) ? 4 : (i == 6) ? 3 : 1;
-					redBit = (i == 4) ? 6 : (i == 5) ? 5 : (i == 6) ? 2 : 0;
-				}
-			} else if (i < 16) {
-				channel = channel_two;
-				if (i < 12) {
-					// Диски 8-11: первый байт
-					greenBit = (i == 8) ? 6 : (i == 9) ? 5 : (i == 10) ? 2 : 1;
-					redBit = (i == 8) ? 7 : (i == 9) ? 4 : (i == 10) ? 3 : 0;
-				} else {
-					// Диски 12-15: второй байт
-					greenBit = (i == 12) ? 6 : (i == 13) ? 4 : (i == 14) ? 2 : 1;
-					redBit = (i == 12) ? 7 : (i == 13) ? 5 : (i == 14) ? 3 : 0;
-				}
-			} else {
-				channel = channel_three;
-				if (i < 20) {
-					// Диски 16-19: первый байт
-					greenBit = (i == 16) ? 7 : (i == 17) ? 5 : (i == 18) ? 3 : 1;
-					redBit = (i == 16) ? 6 : (i == 17) ? 4 : (i == 18) ? 2 : 0;
-				} else {
-					// Диски 20-23: второй байт
-					greenBit = (i == 20) ? 6 : (i == 21) ? 4 : (i == 22) ? 3 : 1;
-					redBit = (i == 20) ? 7 : (i == 21) ? 5 : (i == 22) ? 2 : 0;
-				}
-			}
-			uint8_t byteIndex = (i < 4 || (i >= 8 && i < 12) || (i >= 16 && i < 20)) ? 2 : 1;
-			// Управление светодиодами
-			if (disks[i].error) {
-				// Ошибка: красный светодиод горит постоянно
-				channel[byteIndex] &= ~(1 << (redBit % 8)); // Включаем красный светодиод
-			} else if (disks[i].locate) {
-				// Локация: зеленый и красный светодиоды мигают
-				if (blinkState) {
-					channel[byteIndex] &= ~(1 << (greenBit % 8)); // Включаем зеленый светодиод
-					channel[byteIndex] &= ~(1 << (redBit % 8)); // Включаем красный светодиод
-				} else {
-					channel[byteIndex] |= (1 << (greenBit % 8));  // Выключаем зеленый светодиод
-					channel[byteIndex] |= (1 << (redBit % 8));  // Выключаем красный светодиод
-				}
-			} else if (disks[i].activity) {
-				// Активность: зеленый светодиод мигает
-				if (blinkState) {
-					channel[byteIndex] &= ~(1 << (greenBit % 8)); // Включаем зеленый светодиод
-				} else {
-					channel[byteIndex] |= (1 << (greenBit % 8));  // Выключаем зеленый светодиод
-				}
-			} else if (disks[i].error == 0 && disks[i].locate == 0 && disks[i].activity == 0)
-			{
-				channel[byteIndex] |= (1 << (greenBit % 8));  // Выключаем зеленый светодиод
-				channel[byteIndex] |= (1 << (redBit % 8));  // Выключаем красный светодиод
+		HandleButtons();//buttons
+		UpdateLEDStates(); // Обновление состояния светодиодов
+		static uint8_t blink_phase = 0;
+		blink_phase = !blink_phase; // �?нвертируем состояние
+		for (int i = 0; i < 2; i++) {
+			if (leds[i].is_blinking) {
+				HAL_GPIO_WritePin(leds[i].GPIOx, leds[i].GPIO_Pin,
+						blink_phase ? GPIO_PIN_SET : GPIO_PIN_RESET);
 			}
 		}
-	}
+	} else
+		if (htim->Instance == TIM2 && btn_handler == 0) // 4 раза в секунду
+		{
+			read_disk_status_flag = 1;
 
-	// Обновляем светодиоды на расширителе
-	Set_Led();
+			Read_Disk_Status(0x24, disk_status, 6); // Чтение статуса дисков
+			Decode_Disk_Status(disk_status); // Декодирование статуса
+			Read_disks_connected(); // Чтение подключенных дисков
+
+		} else
+			if (htim->Instance == TIM3 && btn_handler == 0) // 1 раз в секунду
+			{
+				UpdateCPU_PSON();
+				is_launching = 0;
+				//temperature = getMaxTemperature();
+				for (int i = 0; i < MAX_DISKS; ++i) {
+					if (disks[i].activity == 1 && connectActivityTimer[i] != 0 &&
+							(HAL_GetTick() - connectActivityTimer[i] >= 4000)) { // 4 секунды
+						disks[i].activity = 0; // Сбрасываем активность
+						connectActivityTimer[i] = 0; // Сбрасываем таймер
+					}
+				}
+				transmit_temperature_flag = 1; // Устанавливаем флаг для передачи температуры
+
+			}
 }
 
-void InitializeDiskPins()
+/*void InitializeDiskPins()
 
 {
 	// Диск 0
@@ -1422,265 +732,7 @@ void InitializeDiskPins()
 	diskPins[23].activPort = A_DRIVE3_ACTIVITY_GPIO_Port;
 	diskPins[23].activPin = A_DRIVE3_ACTIVITY_Pin;
 
-}
-
-
-
-void PowerOnAdapter(uint8_t adapter_number)
-{
-	uint8_t i2c_buffer[1]; // Буфер для передачи данных по I2C
-
-	if (adapter_number == 1 && adapter1_state != 1) {
-		HAL_GPIO_WritePin(CPU_PSON_GPIO_Port, CPU_PSON_Pin, SET);
-		HAL_GPIO_WritePin(MB1_STATUS_LED_GPIO_Port, MB1_STATUS_LED_Pin, SET);
-		HAL_Delay(100);
-		ResetBus();
-		if(BP_ON == 0) Led_Init();
-		Set_devslp();
-				// Подготовка команды для передачи по I2C
-		i2c_buffer[0] = PWR_ON; // �?спользуем значение из enum
-		HAL_Delay(200);
-		HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_2, 1, HAL_MAX_DELAY);
-		HAL_Delay(50);
-		HAL_I2C_Master_Transmit(&hi2c2, (0x25 << 1), i2c_buffer, 1, HAL_MAX_DELAY); // Передаём буфер
-
-		HAL_TIM_Base_Start_IT(&htim2);
-		HAL_TIM_Base_Start_IT(&htim3);
-		Counter_sgpio_timeout = 0;
-		StartBlinking(&led1, 2, 10000); // Мигание 2 Гц, 10 сек
-
-		/*while (adapter1_state != 1 ){
-			UpdateLED(&led1);
-			UpdateLED(&led2);
-			if(HAL_GPIO_ReadPin(MB1_BITCH_GPIO_Port, MB1_BITCH_Pin)!= 1){ adapter1_state = 1;
-			}else adapter1_state = 0;
-
-	}*/
-	} else if (adapter_number == 2 && adapter2_state != 1 ) {
-		HAL_GPIO_WritePin(CPU_PSON_GPIO_Port, CPU_PSON_Pin, SET);
-
-		HAL_GPIO_WritePin(MB2_STATUS_LED_GPIO_Port, MB2_STATUS_LED_Pin, SET);
-		HAL_Delay(100);
-		ResetBus();
-		if(BP_ON == 0) Led_Init();
-		Set_devslp();
-		HAL_Delay(300);
-		// Подготовка команды для передачи по I2C
-		i2c_buffer[0] = PWR_ON; // �?спользуем значение из enum
-		HAL_Delay(50);
-		HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_3, 1, HAL_MAX_DELAY);
-		HAL_Delay(50);
-		HAL_I2C_Master_Transmit(&hi2c2, (0x25 << 1), i2c_buffer, 1, HAL_MAX_DELAY); // Передаём буфер
-
-		HAL_TIM_Base_Start_IT(&htim2);
-		HAL_TIM_Base_Start_IT(&htim3);
-		Counter_sgpio_timeout = 0;
-		StartBlinking(&led2, 2, 10000); // Мигание 2 Гц, 10 сек
-
-		/*	while (adapter2_state != 1  ){
-			UpdateLED(&led1);
-			UpdateLED(&led2);
-			if(HAL_GPIO_ReadPin(MB2_BITCH_GPIO_Port, MB2_BITCH_Pin)!= 1) {
-				adapter2_state = 1;
-			} else adapter2_state = 0;
-
-	}*/
-
-}
-//UpdateCPU_PSON(); // Обновляем состояние CPU_PSON
-}
-
-void PowerOffAdapter(uint8_t adapter_number)
-{
-	uint8_t i2c_buffer[1]; // Буфер для передачи данных по I2C
-
-	if (adapter_number == 1 && adapter1_state == 1) {
-		// Подготовка команды для передачи по I2C
-		i2c_buffer[0] = PWR_OFF; // �?спользуем значение из enum
-		HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_2, 1, HAL_MAX_DELAY);
-		HAL_Delay(100);
-		HAL_I2C_Master_Transmit(&hi2c2, (0x25 << 1), i2c_buffer, 1, HAL_MAX_DELAY); // Передаём буфер
-		while (adapter1_state != 0){
-			if(HAL_GPIO_ReadPin(MB1_BITCH_GPIO_Port, MB1_BITCH_Pin)!= 1) {
-				adapter1_state = 1;
-			} else adapter1_state = 0;
-		}
-
-
-	} else if (adapter_number == 2 && adapter2_state == 1) {
-		// Подготовка команды для передачи по I2C
-		i2c_buffer[0] = PWR_OFF; // �?спользуем значение из enum
-		HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_3, 1, HAL_MAX_DELAY);
-		HAL_Delay(100);
-		HAL_I2C_Master_Transmit(&hi2c2, (0x25 << 1), i2c_buffer, 1, HAL_MAX_DELAY); // Передаём буфер
-		while (adapter2_state != 0){
-
-			if(HAL_GPIO_ReadPin(MB2_BITCH_GPIO_Port, MB2_BITCH_Pin)!= 1) {
-				adapter2_state = 1;
-			} else adapter2_state = 0;
-		}
-
-	}
-	UpdateCPU_PSON(); // Обновляем состояние CPU_PSON
-}
-
-void UpdateCPU_PSON()
-{
-	if (adapter1_state == 1 || adapter2_state == 1) {
-		// Если хотя бы один адаптер включен, выставляем CPU_PSON в 1
-		HAL_GPIO_WritePin(CPU_PSON_GPIO_Port, CPU_PSON_Pin, SET);
-		BP_ON = 1;
-	} else {
-		// Если оба адаптера выключены, выставляем CPU_PSON в 0
-		HAL_GPIO_WritePin(CPU_PSON_GPIO_Port, CPU_PSON_Pin, RESET);
-		BP_ON = 0;
-	}
-}
-
-
-void HardResetAdapter(uint8_t adapter_number)
-{
-	uint8_t i2c_buffer[1]; // Буфер для передачи данных по I2C
-
-	if (adapter_number == 1 && adapter1_state == 1) {
-		// Подготовка команды для передачи по I2C
-		i2c_buffer[0] = HARD_RESET; // �?спользуем значение из enum
-		HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_2, 1, HAL_MAX_DELAY);
-		HAL_I2C_Master_Transmit(&hi2c2, (0x25 << 1), i2c_buffer, 1, HAL_MAX_DELAY); // Передаём буфер
-		HAL_Delay(6000);
-		StartBlinking(&led1, 4, 5000); // Мигание 4 Гц, 5 сек
-		while (adapter1_state != 0){
-			UpdateLED(&led1);
-			UpdateLED(&led2);
-			if(HAL_GPIO_ReadPin(MB1_BITCH_GPIO_Port, MB1_BITCH_Pin)!= 1) {
-				adapter1_state = 1;
-			} else adapter1_state = 0;
-		}
-
-
-	} else if (adapter_number == 2 && adapter2_state == 1) {
-		// Подготовка команды для передачи по I2C
-		i2c_buffer[0] = HARD_RESET; // �?спользуем значение из enum
-		HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_3, 1, HAL_MAX_DELAY);
-		HAL_I2C_Master_Transmit(&hi2c2, (0x25 << 1), i2c_buffer, 1, HAL_MAX_DELAY); // Передаём буфер
-		HAL_Delay(6000);
-		StartBlinking(&led2, 4, 5000); // Мигание 4 Гц, 5 сек
-		while (adapter2_state != 0){
-			UpdateLED(&led1);
-			UpdateLED(&led2);
-			if(HAL_GPIO_ReadPin(MB2_BITCH_GPIO_Port, MB2_BITCH_Pin)!= 1) {
-				adapter2_state = 1;
-			} else adapter2_state = 0;
-		}
-
-	}
-
-}
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-	if (htim->Instance == TIM1) // 8 раз в секунду
-	{
-		update_led_flag = 1;
-
-
-	} else
-		if (htim->Instance == TIM2) // 4 раза в секунду
-		{
-			read_disk_status_flag = 1;
-			read_disks_connected_flag = 1; // Устанавливаем флаг для чтения подключенных дисков
-		} else
-			if (htim->Instance == TIM3) // 1 раз в секунду
-			{
-
-				transmit_temperature_flag = 1; // Устанавливаем флаг для передачи температуры
-				HAL_IWDG_Refresh(&hiwdg);
-
-				if(sgpio_started == 0 && (adapter1_state == 1 || adapter2_state == 1))
-				{
-					++Counter_sgpio_timeout;
-					if (Counter_sgpio_timeout > 250 && sgpio_started == 0)
-					{
-						sgpio_timeout = 1;
-
-
-					}
-				}
-			}
-}
-
-void TransmitTemperature() {
-
-
-
-
-	// Получаем максимальную температуру
-
-
-	// Преобразуем int8_t в uint8_t для передачи
-	uint8_t data = (uint8_t)temperature;
-
-	if (MB1_attach == 0 && adapter1_state == 1) {
-		HAL_GPIO_WritePin(MB1_STATUS_LED_GPIO_Port, MB1_STATUS_LED_Pin, RESET);
-		HAL_Delay(50);
-		// Выбираем канал 2 мультиплексора
-		HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_2, 1, HAL_MAX_DELAY);
-		HAL_Delay(50);
-
-		// Передаем данные (1 байт)
-		HAL_I2C_Master_Transmit(&hi2c2, (0x25 << 1), &data, 1, HAL_MAX_DELAY);
-	}
-
-	if (MB2_attach == 0 && adapter2_state == 1) {
-		HAL_GPIO_WritePin(MB2_STATUS_LED_GPIO_Port, MB2_STATUS_LED_Pin, RESET);
-		HAL_Delay(50);
-		// Выбираем канал 3 мультиплексора
-		HAL_I2C_Master_Transmit(&hi2c2, (I2C_adapter_adr << 1), I2CInit_3, 1, HAL_MAX_DELAY);
-		HAL_Delay(50);
-
-		// Передаем данные (1 байт)
-		HAL_I2C_Master_Transmit(&hi2c2, (0x25 << 1), &data, 1, HAL_MAX_DELAY);
-	}
-
-}
-
-void ProcessPins(uint8_t diskIndex)
-{
-
-	if (sgpio_started != 1 && disks[diskIndex].isConnected == 1)
-	{
-		GPIO_PinState activState = HAL_GPIO_ReadPin(diskPins[diskIndex].activPort, diskPins[diskIndex].activPin);
-
-		// Если состояние изменилось
-		if ((activState == GPIO_PIN_SET && previousActivity[diskIndex] == 0) ||
-				(activState == GPIO_PIN_RESET && previousActivity[diskIndex] == 1)) {
-			// Обновляем статус активности диска
-			disks[diskIndex].activity = 1;
-
-			// Обновляем статус диска
-			Update_Disk_Status(diskIndex, disks[diskIndex].activity, 0, 0);
-
-			// Сохраняем текущее состояние как предыдущее
-			previousActivity[diskIndex] = activState;
-			// Запускаем таймер на 5 секунд
-			activityTimer[diskIndex] = HAL_GetTick(); // Запоминаем текущее время
-		}
-	}
-}
-
-
-
-void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin)
-{
-	HAL_TIM_Base_Stop_IT(&htim3);
-	if (GPIO_Pin == FP_MB1_PWR_SW_Pin) {
-		button1_pressed = 1;
-		button1_press_time = HAL_GetTick();
-	} else if (GPIO_Pin == FP_MB2_PWR_SW_Pin) {
-		button2_pressed = 1;
-		button2_press_time = HAL_GetTick();
-	}
-
-}
+}*/
 /* USER CODE END 4 */
 
 /**
@@ -1692,7 +744,7 @@ void Error_Handler(void)
   /* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
 	__disable_irq();
-	flag_error = 1;
+
 	while (1)
 	{
 	}

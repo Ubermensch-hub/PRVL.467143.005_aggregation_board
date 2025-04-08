@@ -1,0 +1,3 @@
+../Core/Src/temperature.c:12:8:readTemperature	2
+../Core/Src/temperature.c:34:8:getMaxTemperature	2
+../Core/Src/temperature.c:41:6:TransmitTemperature	5

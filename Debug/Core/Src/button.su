@@ -1,0 +1,3 @@
+../Core/Src/button.c:12:6:HandleButtons	16	static
+../Core/Src/button.c:18:6:ProcessButton	32	static
+../Core/Src/button.c:70:6:ButtonAction	16	static

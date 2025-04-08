@@ -1,0 +1,6 @@
+../Core/Src/diks.c:13:6:Read_disks_connected	28
+../Core/Src/diks.c:204:6:Set_devslp	4
+../Core/Src/diks.c:235:6:Initialize_Disks	2
+../Core/Src/diks.c:245:6:UpdateDiskStatus	1
+../Core/Src/diks.c:252:6:Read_Disk_Status	14
+../Core/Src/diks.c:295:6:Decode_Disk_Status	19

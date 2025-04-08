@@ -1,0 +1,5 @@
+../Core/Src/adapter.c:18:6:Adapter_Init	1
+../Core/Src/adapter.c:23:6:PowerOnAdapter	9
+../Core/Src/adapter.c:69:6:PowerOffAdapter	7
+../Core/Src/adapter.c:105:6:HardResetAdapter	5
+../Core/Src/adapter.c:136:6:UpdateCPU_PSON	20
